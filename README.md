@@ -43,7 +43,7 @@ Specifically, we seek to:
 
 ---
 
-## What You'll Build
+## What We'll Build
 
 Participating teams will develop systems that:
 
