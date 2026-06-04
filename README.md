@@ -372,33 +372,41 @@ Teams are encouraged to include optional fields that demonstrate the depth of th
 Although the challenge does not require a specific architecture, participants may consider building a modular explainable QA system with the following components:
 
 ```text
-User Query
-   |
-   v
-Query Classifier
-   |-----------------------------|
-   |                             |
-   v                             v
-Type 1 Logic QA              Type 2 Physics QA
-   |                             |
-   v                             v
-Premise Parser               Formula Retriever
-   |                             |
-   v                             v
-NL-to-FOL Converter          Variable Extractor
-   |                             |
-   v                             v
-Symbolic Engine              Calculator / Solver
-   |                             |
-   v                             v
-Answer Verifier              Answer Verifier
-   |                             |
-   |-------------|---------------|
-                 v
-        Explanation Generator
-                 |
-                 v
-          API JSON Response
+                           ┌────────────────────────────┐
+                           │ User Query                 │
+                           └─────────────┬──────────────┘
+                                         │
+                                         v
+                           ┌────────────────────────────┐
+                           │ Supervisor Agent            │
+                           │ - classify query            │
+                           │ - select registered agent   │
+                           └─────────────┬──────────────┘
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    │                                         │
+                    v                                         v
+        ┌───────────────────────┐               ┌───────────────────────┐
+        │ Physics Agent          │               │ Logic Agent            │
+        │                        │               │                        │
+        │ Reasoning              │               │ Reasoning              │
+        │ Tool Selection         │               │ Tool Selection         │
+        │ Execute Tools          │               │ Execute Tools          │
+        │ Gather Results         │               │ Gather Results         │
+        │ Self Evaluation        │               │ Self Evaluation        │
+        │ Self Correction        │               │ Self Correction        │
+        │ Build Output           │               │ Build Output           │
+        └───────────┬───────────┘               └───────────┬───────────┘
+                    │                                       │
+                    └────────────────────┬──────────────────┘
+                                         v
+                           ┌────────────────────────────┐
+                           │         Supervisor         │
+                           └─────────────┬──────────────┘
+                                         v
+                           ┌────────────────────────────┐
+                           │ Final JSON Response         │
+                           └────────────────────────────┘
 ```
 
 Possible implementation choices include:
