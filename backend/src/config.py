@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Tuple, Type
-from functools import lru_cache
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import (
@@ -66,6 +66,14 @@ class CheckpointSettings(ConfigModel):
     pool_timeout: float = 30.0
 
 
+class RegisteredDatabaseSettings(ConfigModel):
+    name: str
+    description: str = ""
+    document_types: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    mcp_server: str | None = None
+
+
 class VectorStoreSettings(ConfigModel):
     mode: Literal["bm25", "chroma", "hybrid"] = "hybrid"
 
@@ -78,8 +86,11 @@ class VectorStoreSettings(ConfigModel):
     persist_directory: Path = Path("./chroma_db")
     host: str = "localhost"
     port: int = 8000
+    default_collection: str = "legal_articles"
 
     rrf_k: int = 60
+    top_k: int = 8
+    databases: dict[str, RegisteredDatabaseSettings] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def resolve_persist_directory(self):
@@ -97,18 +108,21 @@ class MCPSettings(ConfigModel):
     enabled: bool = False
     servers: dict[str, MCPServerSettings] = Field(default_factory=dict)
 
+
 class LegalAssistantSettings(ConfigModel):
     checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
 
+
 class Settings(BaseSettings):
     app: AppSettings = Field(default_factory=AppSettings)
-    llm: LLMSettings
-    embeddings: EmbeddingsSettings
-    ocr: OCRSettings
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+    embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
+    ocr: OCRSettings = Field(default_factory=OCRSettings)
     legal_assistant: LegalAssistantSettings = Field(
-        validation_alias=AliasChoices("legal_assistant", "legal-assistant")
+        default_factory=LegalAssistantSettings,
+        validation_alias=AliasChoices("legal_assistant", "legal-assistant"),
     )
 
     model_config = SettingsConfigDict(
@@ -117,6 +131,10 @@ class Settings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @property
+    def mineru(self) -> OCRSettings:
+        return self.ocr
 
     @classmethod
     def settings_customise_sources(
@@ -139,3 +157,6 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+settings = get_settings()

@@ -37,6 +37,19 @@ legal_assistant:
     host: localhost
     port: 8004
     rrf_k: 60
+    top_k: 8
+    default_collection: legal_articles
+    databases:
+      default:
+        name: Core Vietnamese SME legal database
+        description: Main corpus for laws, decrees, circulars, labor, tax, contracts, and enterprise law.
+        document_types: [law, decree, circular, contract, tax, labor, enterprise]
+        enabled: true
+      enterprise_law:
+        name: Enterprise law database
+        description: Specialized corpus for Luat Doanh nghiep and related SME governance documents.
+        document_types: [law, enterprise]
+        enabled: true
   mcp:
     enabled: true
     servers:
