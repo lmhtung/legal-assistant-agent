@@ -1,0 +1,46 @@
+app:
+  host: 0.0.0.0
+  port: 8000
+
+llm:
+  api_key: sk-1234
+  base_url: http://localhost:8001/v1
+  default_model: qwen3-8b-fp8
+
+embeddings:
+  api_key: sk-1234
+  base_url: http://localhost:8002/v1
+  model: bge-m3
+
+ocr:
+  api_key: sk-1234
+  base_url: http://localhost:8003/v1
+  model: mineru-ocr
+
+
+legal_assistant:
+  checkpoint:
+    backend: memory
+    database_url: postgresql://user:password@host:5432/dbname
+    pool_min_size: 2
+    pool_max_size: 10
+    pool_max_idle: 300.0
+    pool_timeout: 30.0
+  vector_store:
+    mode: hybrid
+    bm25_index_field: content # title
+    bm25_k1: 2.0
+    bm25_b: 1.0
+    bm25_epsilon: 0.5
+    chroma_mode: local
+    persist_directory: ./chroma_db
+    host: localhost
+    port: 8004
+    rrf_k: 60
+  mcp:
+    enabled: true
+    servers:
+      my_server:
+        url: http://localhost:8004/mcp
+        transport: http
+
