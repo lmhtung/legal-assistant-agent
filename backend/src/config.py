@@ -1,3 +1,9 @@
+"""Application configuration loaded from ``backend/config.yaml``.
+
+Only settings required by the structured-dataset pipeline are kept here:
+FastAPI app settings, OpenAI-compatible LLM/embedding endpoints, PostgreSQL,
+and retrieval/vector-store options.
+"""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -17,17 +23,25 @@ CONFIG_FILE = PRJ_ROOT / "config.yaml"
 
 
 class ConfigModel(BaseModel):
-    """Base class for nested config sections loaded from YAML."""
+    """Base class for nested config blocks.
+
+    ``extra='ignore'`` lets config.yaml contain harmless future keys while the
+    code only reads fields explicitly declared here.
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
 class AppSettings(ConfigModel):
+    """FastAPI host/port settings."""
+
     host: str = "0.0.0.0"
     port: int = 8000
 
 
 class LLMSettings(ConfigModel):
+    """OpenAI-compatible chat model settings, backed by the local vLLM server."""
+
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8001/v1"
     model_name: str = Field(
@@ -39,87 +53,67 @@ class LLMSettings(ConfigModel):
 
 
 class EmbeddingsSettings(ConfigModel):
+    """OpenAI-compatible embedding model settings, backed by the local server."""
+
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8002/v1"
     model: str = "bge-m3"
 
 
-class OCRSettings(ConfigModel):
-    api_key: str = "sk-1234"
-    base_url: str = "http://localhost:8003/v1"
-    model: str = "mineru-ocr"
-    output_dir: Path = PRJ_ROOT / "outputs" / "mineru"
+class PostgreSQLSettings(ConfigModel):
+    """PostgreSQL storage for structured legal records."""
 
-    @model_validator(mode="after")
-    def resolve_output_dir(self):
-        if not self.output_dir.is_absolute():
-            self.output_dir = PRJ_ROOT / self.output_dir
-        return self
-
-
-class CheckpointSettings(ConfigModel):
-    backend: Literal["memory", "postgres"] = "memory"
-    database_url: str | None = None
-    pool_min_size: int = 2
-    pool_max_size: int = 10
-    pool_max_idle: float = 300.0
-    pool_timeout: float = 30.0
-
-
-class RegisteredDatabaseSettings(ConfigModel):
-    name: str
-    description: str = ""
-    document_types: list[str] = Field(default_factory=list)
     enabled: bool = True
-    mcp_server: str | None = None
+    database_url: str = "postgresql://user:password@localhost:5432/legal_assistant"
+
+
+class RetrievalSettings(ConfigModel):
+    """Controls which text is embedded at query time before retrieval."""
+
+    query_mode: Literal["rewrite_query", "hypothetical_answer"] = "rewrite_query"
+
+
+class QueryRewriteSettings(ConfigModel):
+    """Controls the LLM rewrite/HyDE pre-retrieval step."""
+
+    enabled: bool = True
+    use_llm: bool = True
+    max_variants: int = 3
 
 
 class VectorStoreSettings(ConfigModel):
+    """Vector and hybrid retrieval settings."""
+
     mode: Literal["bm25", "chroma", "hybrid"] = "hybrid"
-
-    bm25_index_field: str = "content"
-    bm25_k1: float = 2.0
-    bm25_b: float = 1.0
-    bm25_epsilon: float = 0.5
-
-    chroma_mode: Literal["local", "remote"] = "local"
     persist_directory: Path = Path("./chroma_db")
-    host: str = "localhost"
-    port: int = 8000
     default_collection: str = "legal_articles"
-
     rrf_k: int = 60
     top_k: int = 8
-    databases: dict[str, RegisteredDatabaseSettings] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def resolve_persist_directory(self):
+        """Resolve a relative Chroma path against the backend directory."""
+
         if not self.persist_directory.is_absolute():
             self.persist_directory = PRJ_ROOT / self.persist_directory
         return self
 
 
-class MCPServerSettings(ConfigModel):
-    url: str
-    transport: Literal["http", "stdio", "sse"] = "http"
-
-
-class MCPSettings(ConfigModel):
-    enabled: bool = False
-    servers: dict[str, MCPServerSettings] = Field(default_factory=dict)
-
-
 class LegalAssistantSettings(ConfigModel):
-    checkpoint: CheckpointSettings = Field(default_factory=CheckpointSettings)
+    """Top-level legal assistant settings."""
+
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
+    query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
-    mcp: MCPSettings = Field(default_factory=MCPSettings)
 
 
 class Settings(BaseSettings):
+    """Root settings object used by the application."""
+
     app: AppSettings = Field(default_factory=AppSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
-    ocr: OCRSettings = Field(default_factory=OCRSettings)
+    postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
     legal_assistant: LegalAssistantSettings = Field(
         default_factory=LegalAssistantSettings,
         validation_alias=AliasChoices("legal_assistant", "legal-assistant"),
@@ -132,10 +126,6 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    @property
-    def mineru(self) -> OCRSettings:
-        return self.ocr
-
     @classmethod
     def settings_customise_sources(
         cls,
@@ -145,6 +135,8 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        """Read init/env/dotenv first, then YAML, then file secrets."""
+
         return (
             init_settings,
             env_settings,
@@ -156,6 +148,8 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    """Return a cached settings object for dependency injection."""
+
     return Settings()
 
 

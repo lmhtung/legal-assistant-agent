@@ -6,54 +6,27 @@ llm:
   api_key: sk-1234
   base_url: http://localhost:8001/v1
   default_model: qwen3-8b-fp8
+  temperature: 0.0
 
 embeddings:
   api_key: sk-1234
   base_url: http://localhost:8002/v1
   model: bge-m3
 
-ocr:
-  api_key: sk-1234
-  base_url: http://localhost:8003/v1
-  model: mineru-ocr
-
+postgres:
+  enabled: true
+  database_url: postgresql://user:password@localhost:5432/legal_assistant
 
 legal_assistant:
-  checkpoint:
-    backend: memory
-    database_url: postgresql://user:password@host:5432/dbname
-    pool_min_size: 2
-    pool_max_size: 10
-    pool_max_idle: 300.0
-    pool_timeout: 30.0
+  retrieval:
+    query_mode: rewrite_query # rewrite_query | hypothetical_answer
+  query_rewrite:
+    enabled: true
+    use_llm: true
+    max_variants: 3
   vector_store:
-    mode: hybrid
-    bm25_index_field: content # title
-    bm25_k1: 2.0
-    bm25_b: 1.0
-    bm25_epsilon: 0.5
-    chroma_mode: local
+    mode: hybrid # bm25 | chroma | hybrid
     persist_directory: ./chroma_db
-    host: localhost
-    port: 8004
+    default_collection: legal_articles
     rrf_k: 60
     top_k: 8
-    default_collection: legal_articles
-    databases:
-      default:
-        name: Core Vietnamese SME legal database
-        description: Main corpus for laws, decrees, circulars, labor, tax, contracts, and enterprise law.
-        document_types: [law, decree, circular, contract, tax, labor, enterprise]
-        enabled: true
-      enterprise_law:
-        name: Enterprise law database
-        description: Specialized corpus for Luat Doanh nghiep and related SME governance documents.
-        document_types: [law, enterprise]
-        enabled: true
-  mcp:
-    enabled: true
-    servers:
-      my_server:
-        url: http://localhost:8004/mcp
-        transport: http
-

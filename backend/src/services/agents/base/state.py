@@ -1,3 +1,4 @@
+"""TypedDict state shared by LangGraph nodes."""
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -7,8 +8,14 @@ from src.services.agents.base.context import AgentContext
 
 
 class AgentState(TypedDict, total=False):
+    """Mutable state object passed from node to node."""
+
     question_id: int | None
     question: str
+    rewritten_question: str
+    hypothetical_answer: str
+    retrieval_question: str
+    query_variants: list[str]
     context: AgentContext
     messages: list[Any]
     tool_calls: list[dict[str, Any]]
