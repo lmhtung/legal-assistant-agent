@@ -45,12 +45,14 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             top_k=request.top_k or self.settings.legal_assistant.vector_store.top_k,
             competition_mode=True,
             rewrite_query_enabled=rewrite_enabled,
+            metadata={"short_memory": request.conversation_history},
         )
         return {
             "question_id": request.id,
             "question": request.question,
             "retrieval_question": request.question,
             "query_variants": [request.question],
+            "short_memory": request.conversation_history,
             "context": context,
             "tool_calls": [],
             "debug": {},
@@ -97,6 +99,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         """Chuẩn bị text dùng cho retrieval."""
 
         context = state.get("context") or AgentContext()
+        history = state.get("short_memory") or context.metadata.get("short_memory", [])
         question = state["question"]
         if not context.rewrite_query_enabled:
             state["retrieval_question"] = question
@@ -109,9 +112,9 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         tool_name = mode
         if self.llm is not None and self.settings.legal_assistant.query_rewrite.use_llm:
             prompt = (
-                build_hypothetical_answer_prompt(question)
+                build_hypothetical_answer_prompt(question, history)
                 if mode == "hypothetical_answer"
-                else build_query_rewrite_prompt(question)
+                else build_query_rewrite_prompt(question, history)
             )
             try:
                 candidate = (await self.llm.ainvoke(prompt)).strip()
@@ -239,7 +242,9 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                 "Tôi không nên đưa ra kết luận pháp lý khi không có căn cứ rõ ràng."
             )
             return state
-        prompt = build_grounded_answer_prompt(state["question"], articles)
+        context = state.get("context") or AgentContext()
+        history = state.get("short_memory") or context.metadata.get("short_memory", [])
+        prompt = build_grounded_answer_prompt(state["question"], articles, history)
         if self.llm is None:
             state["answer"] = self._fallback_answer(state["question"], articles)
             state.setdefault("debug", {})["answer_prompt"] = prompt
@@ -315,6 +320,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                     "hypothetical_answer": state.get("hypothetical_answer"),
                     "retrieval_question": state.get("retrieval_question"),
                     "query_variants": state.get("query_variants", []),
+                    "short_memory_messages": len(state.get("short_memory", [])),
                 }
             )
         return LegalAnswerResponse(

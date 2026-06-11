@@ -21,6 +21,7 @@ class AgentState(TypedDict, total=False):
     hypothetical_answer: str
     retrieval_question: str
     query_variants: list[str]
+    short_memory: list[Any]
     context: AgentContext
     messages: list[Any]
     tool_calls: list[dict[str, Any]]

@@ -5,7 +5,7 @@ Tách prompt khỏi agent giúp dễ chỉnh wording mà không đụng logic gr
 """
 from __future__ import annotations
 
-from src.schemas.legal import LegalArticle
+from src.schemas.legal import ChatHistoryMessage, LegalArticle
 
 SYSTEM_PROMPT = """Bạn là trợ lý pháp lý AI cho doanh nghiệp SME tại Việt Nam.
 Chỉ trả lời dựa trên các điều luật được cung cấp. Nếu căn cứ chưa đủ, hãy nói rõ giới hạn.
@@ -14,16 +14,38 @@ Luôn viết tiếng Việt rõ ràng, ngắn gọn, có dẫn nguồn Điều X
 
 QUERY_REWRITE_PROMPT = """Bạn là bộ phận tối ưu truy vấn cho hệ thống truy hồi văn bản pháp luật Việt Nam.
 Viết lại câu hỏi sau thành một truy vấn tìm kiếm ngắn gọn, giữ nguyên ý pháp lý chính, bổ sung từ khóa pháp luật quan trọng nếu có.
+Nếu câu hỏi hiện tại dùng đại từ như "việc đó", "trường hợp này", hãy dùng lịch sử chat để thay bằng chủ thể pháp lý rõ ràng.
 Không trả lời câu hỏi. Chỉ trả về truy vấn đã viết lại.
 
-Câu hỏi: {question}
+Lịch sử chat gần đây:
+{history}
+
+Câu hỏi hiện tại: {question}
 Truy vấn tối ưu:"""
 
 HYPOTHETICAL_ANSWER_PROMPT = """Bạn là trợ lý pháp lý. Hãy viết một đoạn trả lời ngắn, súc tích, có các thuật ngữ pháp lý có khả năng xuất hiện trong văn bản luật liên quan.
 Không cần trích nguồn, không cần chắc chắn đúng hoàn toàn. Mục tiêu là tạo đoạn văn giàu ngữ nghĩa để embedding và truy hồi.
+Nếu câu hỏi hiện tại phụ thuộc lịch sử chat, hãy dùng lịch sử để làm rõ ngữ cảnh.
 
-Câu hỏi: {question}
+Lịch sử chat gần đây:
+{history}
+
+Câu hỏi hiện tại: {question}
 Đoạn trả lời ngắn:"""
+
+
+def format_short_memory(history: list[ChatHistoryMessage] | list[dict] | None) -> str:
+    """Format short-memory thành block ngắn đưa vào prompt."""
+
+    if not history:
+        return "N/A"
+    lines: list[str] = []
+    for item in history:
+        role = item.role if hasattr(item, "role") else item.get("role", "user")
+        content = item.content if hasattr(item, "content") else item.get("content", "")
+        label = "Người dùng" if role == "user" else "Trợ lý"
+        lines.append(f"{label}: {content}")
+    return "\n".join(lines)
 
 
 def format_article_context(articles: list[LegalArticle]) -> str:
@@ -50,25 +72,32 @@ def format_article_context(articles: list[LegalArticle]) -> str:
     return "\n\n".join(blocks)
 
 
-def build_query_rewrite_prompt(question: str) -> str:
+def build_query_rewrite_prompt(question: str, history: list[ChatHistoryMessage] | list[dict] | None = None) -> str:
     """Build prompt yêu cầu LLM viết lại câu hỏi thành truy vấn pháp lý."""
 
-    return QUERY_REWRITE_PROMPT.format(question=question)
+    return QUERY_REWRITE_PROMPT.format(question=question, history=format_short_memory(history))
 
 
-def build_hypothetical_answer_prompt(question: str) -> str:
+def build_hypothetical_answer_prompt(question: str, history: list[ChatHistoryMessage] | list[dict] | None = None) -> str:
     """Build prompt HyDE: sinh câu trả lời ngắn để embedding/search."""
 
-    return HYPOTHETICAL_ANSWER_PROMPT.format(question=question)
+    return HYPOTHETICAL_ANSWER_PROMPT.format(question=question, history=format_short_memory(history))
 
 
-def build_grounded_answer_prompt(question: str, articles: list[LegalArticle]) -> str:
+def build_grounded_answer_prompt(
+    question: str,
+    articles: list[LegalArticle],
+    history: list[ChatHistoryMessage] | list[dict] | None = None,
+) -> str:
     """Build prompt trả lời dựa hoàn toàn trên các điều luật đã retrieve."""
 
     context = format_article_context(articles)
     return f"""{SYSTEM_PROMPT}
 
-Câu hỏi:
+Lịch sử chat gần đây:
+{format_short_memory(history)}
+
+Câu hỏi hiện tại:
 {question}
 
 Căn cứ pháp lý đã truy hồi:
@@ -76,6 +105,7 @@ Căn cứ pháp lý đã truy hồi:
 
 Yêu cầu trả lời:
 - Nếu có căn cứ, trả lời trực tiếp và nêu rõ Điều X, tên văn bản liên quan.
+- Dùng lịch sử chat chỉ để hiểu ngữ cảnh câu hỏi hiện tại, không dùng lịch sử làm căn cứ pháp lý.
 - Không bịa thêm điều luật ngoài danh sách căn cứ.
 - Kết thúc bằng cảnh báo ngắn: đây là thông tin tham khảo, nên hỏi chuyên gia khi vụ việc có rủi ro cao.
 """

@@ -104,7 +104,8 @@ Backend làm các việc:
 - Rewrite query hoặc sinh hypothetical answer.
 - Gọi MCP tool `search_legal_articles`.
 - Nếu bật, gọi tiếp MCP tool `search_relevant` dựa trên `extra`.
-- Prompt LLM bằng các điều luật đã retrieve.
+- Đọc short-memory theo `session_id` khi dùng endpoint `/chat`.
+- Prompt LLM bằng các điều luật đã retrieve và ngữ cảnh chat ngắn.
 - Format nguồn theo `relevant_docs`, `relevant_articles`.
 
 ## 4. Luồng Xử Lý Một Câu Hỏi
@@ -118,7 +119,8 @@ sequenceDiagram
     participant V as Vector DB
     participant P as PostgreSQL
 
-    U->>B: POST /api/v1/legal/answer
+    U->>B: POST /api/v1/legal/chat hoặc /answer
+    B->>B: lấy short-memory nếu có session_id
     B->>L: rewrite_query hoặc hypothetical_answer
     L-->>B: retrieval_text
     B->>M: search_legal_articles(retrieval_text, databases, top_k)
@@ -258,6 +260,17 @@ File:
 backend/config.yaml
 ```
 
+Short-memory cho chat:
+
+```yaml
+short_memory:
+  enabled: true
+  max_turns: 6
+  max_chars: 4000
+```
+
+Memory này chỉ áp dụng cho `/api/v1/legal/chat`. Client cần gửi cùng `session_id` để backend nối các lượt chat lại với nhau. `/answer` và `/batch` vẫn stateless.
+
 MCP retrieval:
 
 ```yaml
@@ -384,7 +397,28 @@ flowchart TD
     Format --> Response[LegalAnswerResponse]
 ```
 
-## 11. Điểm Mạnh Của Kiến Trúc Hiện Tại
+## 11. Short-Memory Trong Chat
+
+Short-memory được đặt trong backend runtime, không nằm ở MCP và không ghi database.
+
+Luồng hoạt động:
+
+```text
+/chat request có session_id
+-> ShortMemoryStore lấy vài lượt gần nhất
+-> LegalAnswerRequest.conversation_history
+-> rewrite/HyDE prompt dùng history để làm rõ câu hỏi
+-> grounded answer prompt dùng history để hiểu ngữ cảnh
+-> lưu lượt user/assistant mới vào memory
+```
+
+Giới hạn:
+
+- Memory mất khi backend process restart.
+- Không dùng làm căn cứ pháp lý.
+- Chỉ dùng để hiểu câu hỏi nối tiếp trong cùng đoạn chat.
+
+## 12. Điểm Mạnh Của Kiến Trúc Hiện Tại
 
 - Data tách khỏi agent, đúng yêu cầu không import/sửa dữ liệu trong backend.
 - MCP là nơi mở rộng tools, backend không ôm data logic.
@@ -393,7 +427,7 @@ flowchart TD
 - MCP server có plugin structure đủ gọn nhưng vẫn học được điểm hay từ project mẫu.
 - Output nguồn được kiểm soát deterministic hơn nhờ `extra`.
 
-## 12. Cách Mở Rộng
+## 13. Cách Mở Rộng
 
 ### Thêm tool MCP mới
 
@@ -438,7 +472,7 @@ mcp_retrieval:
   fallback_to_local: false
 ```
 
-## 13. Những Phần Đã Cố Tình Loại Bỏ
+## 14. Những Phần Đã Cố Tình Loại Bỏ
 
 Các phần sau không còn nằm trong backend agent:
 
@@ -451,7 +485,7 @@ Các phần sau không còn nằm trong backend agent:
 
 Lý do: data system là khối độc lập, tự cập nhật và tự build index.
 
-## 14. Kết Luận
+## 15. Kết Luận
 
 Kiến trúc hiện tại phù hợp với mục tiêu legal assistant có dữ liệu tách biệt:
 

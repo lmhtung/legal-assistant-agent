@@ -1,7 +1,7 @@
 """Cấu hình ứng dụng đọc từ ``backend/config.yaml`` và biến môi trường.
 
 File này là nơi gom toàn bộ cấu hình runtime: FastAPI, LLM, embedding,
-MCP retrieval và fallback vector store local. Các class cấu hình dùng Pydantic để:
+MCP retrieval, short-memory và fallback vector store local. Các class cấu hình dùng Pydantic để:
 
 - validate kiểu dữ liệu ngay khi app khởi động;
 - có default rõ ràng khi thiếu config;
@@ -67,6 +67,18 @@ class EmbeddingsSettings(ConfigModel):
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8002/v1"
     model: str = "bge-m3"
+
+
+class ShortMemorySettings(ConfigModel):
+    """Cấu hình short-memory cho endpoint chat theo session_id.
+
+    Memory này chỉ nằm trong RAM của backend process, dùng để giữ vài lượt gần
+    nhất trong cùng một đoạn chat. Nó không thay thế database/checkpoint dài hạn.
+    """
+
+    enabled: bool = True
+    max_turns: int = 6
+    max_chars: int = 4000
 
 
 class MCPServerSettings(ConfigModel):
@@ -142,6 +154,7 @@ class Settings(BaseSettings):
     app: AppSettings = Field(default_factory=AppSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
+    short_memory: ShortMemorySettings = Field(default_factory=ShortMemorySettings)
     mcp_retrieval: MCPRetrievalSettings = Field(default_factory=MCPRetrievalSettings)
     legal_assistant: LegalAssistantSettings = Field(
         default_factory=LegalAssistantSettings,

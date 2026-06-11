@@ -28,6 +28,19 @@ POST /api/v1/legal/chat
 GET  /health
 ```
 
+## Short Memory
+
+Endpoint `/api/v1/legal/chat` có short-memory theo `session_id`. Memory này chỉ lưu trong RAM và giữ vài lượt gần nhất để hiểu các câu hỏi nối tiếp trong cùng một đoạn chat.
+
+```yaml
+short_memory:
+  enabled: true
+  max_turns: 6
+  max_chars: 4000
+```
+
+Cách dùng: các request chat cùng đoạn hội thoại cần gửi cùng `session_id`. Endpoint `/answer` và `/batch` vẫn stateless.
+
 ## MCP Retrieval
 
 Bật MCP trong `backend/config.yaml`:

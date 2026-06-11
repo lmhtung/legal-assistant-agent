@@ -104,6 +104,13 @@ class RetrievalQuery(BaseModel):
         return values
 
 
+class ChatHistoryMessage(BaseModel):
+    """Một message ngắn trong lịch sử chat của cùng session."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class LegalAnswerRequest(BaseModel):
     """API request cho một câu hỏi pháp lý."""
 
@@ -112,6 +119,7 @@ class LegalAnswerRequest(BaseModel):
     databases: list[str] = Field(default_factory=lambda: ["default"])
     top_k: int = 8
     include_debug: bool = False
+    conversation_history: list[ChatHistoryMessage] = Field(default_factory=list)
 
 
 class LegalAnswerResponse(BaseModel):
