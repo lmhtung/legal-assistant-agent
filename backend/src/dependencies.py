@@ -11,6 +11,7 @@ from functools import lru_cache
 from src.config import get_settings
 from src.services.agents.legal_assistant import LegalAssistantAgent
 from src.services.llm.client import LLMClient
+from src.services.mcp import MCPRetrievalClient
 
 
 @lru_cache(maxsize=1)
@@ -18,6 +19,19 @@ def get_llm_client() -> LLMClient:
     """Tạo LLM client dùng chung cho toàn bộ FastAPI process."""
 
     return LLMClient()
+
+
+@lru_cache(maxsize=1)
+def get_mcp_retrieval_client() -> MCPRetrievalClient | None:
+    """Tạo MCP retrieval client nếu config bật MCP."""
+
+    settings = get_settings()
+    if not settings.mcp_retrieval.enabled:
+        return None
+    return MCPRetrievalClient(
+        servers=settings.mcp_retrieval.servers,
+        primary_server=settings.mcp_retrieval.primary_server,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -30,4 +44,4 @@ def get_legal_assistant_agent() -> LegalAssistantAgent:
 
     settings = get_settings()
     llm = get_llm_client() if settings.legal_assistant.query_rewrite.use_llm else None
-    return LegalAssistantAgent(llm=llm)
+    return LegalAssistantAgent(llm=llm, mcp_client=get_mcp_retrieval_client())

@@ -1,60 +1,16 @@
 # Legal Assistant Backend
 
-Backend được chia thành 2 luồng, nhưng chỉ có agent là HTTP service:
+Backend này chỉ chạy agent hỏi đáp. Phần database/vector database được quản lý qua MCP server hoặc hệ thống data bên ngoài.
 
 ```text
-Offline Data Builder -> structured dataset -> PostgreSQL + vector index
-Agent Service        -> question -> rewrite/HyDE -> retrieval -> grounded answer
+External Data System -> tự build PostgreSQL/vector DB
+MCP Server           -> expose retrieval tools
+Agent Service        -> question -> rewrite/HyDE -> MCP tool call -> grounded answer
 ```
 
-Data flow và prompt flow tách biệt. Data builder tự xử lý import/index dữ liệu, còn agent service chỉ đọc kho đã được build để trả lời.
+Backend agent không có script import data, không có endpoint dataset, không mở port data và không ghi PostgreSQL. Khi bật MCP, agent gọi tool MCP trên server `legal_retrieval`. Khi MCP tắt hoặc lỗi và `fallback_to_local=true`, agent dùng tool local cũ trong backend.
 
-## 1. Offline Data Builder
-
-Data builder không chạy port riêng và không expose endpoint. Nó là job nội bộ dùng khi cần thêm hoặc rebuild dữ liệu.
-
-Nhiệm vụ:
-
-- Đọc structured legal dataset dạng JSON/JSONL.
-- Lưu record vào PostgreSQL nếu `postgres.enabled=true`.
-- Tạo vector index từ `vector_text`.
-- Chia dữ liệu theo `database` logic, ví dụ `labor`, `civil`, `criminal`.
-
-Chạy import:
-
-```bash
-cd backend
-PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl
-```
-
-Nếu chỉ muốn build vector hoặc chỉ muốn lưu PostgreSQL:
-
-```bash
-PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl --skip-postgres
-PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl --skip-vector
-```
-
-PostgreSQL dùng Docker như bạn đang chạy thì chỉ cần cấu hình đúng `postgres.database_url`, ví dụ port mapping `0.0.0.0:25432->5432/tcp` tương ứng với:
-
-```yaml
-postgres:
-  enabled: true
-  database_url: postgresql://user:password@localhost:25432/legal_assistant
-```
-
-`25432` ở đây là port PostgreSQL, không phải port service data.
-
-## 2. Agent Service
-
-Agent Service là FastAPI runtime, mặc định port `8000`.
-
-Nhiệm vụ:
-
-- Nhận câu hỏi người dùng.
-- Rewrite query hoặc sinh hypothetical answer theo config.
-- Search các vector store đã build theo `databases` được chọn.
-- Prompt LLM với các điều luật đã tìm được.
-- Trả `answer`, `relevant_docs`, `relevant_articles` theo format bài thi.
+## Agent Service
 
 Chạy agent:
 
@@ -72,59 +28,49 @@ POST /api/v1/legal/chat
 GET  /health
 ```
 
-## Config
+## MCP Retrieval
 
-File: `backend/config.yaml`.
+Bật MCP trong `backend/config.yaml`:
+
+```yaml
+mcp_retrieval:
+  enabled: true
+  primary_server: legal_retrieval
+  servers:
+    legal_retrieval:
+      url: http://localhost:8765/mcp
+      transport: http
+  fallback_to_local: true
+  fetch_related: true
+  related_top_k: 16
+```
+
+Khi bật, agent gọi:
+
+```text
+search_legal_articles -> search vector DB qua MCP
+search_relevant       -> đọc extra rồi query PostgreSQL exact match, không embedding
+```
+
+## Query Mode
 
 ```yaml
 legal_assistant:
   retrieval:
     query_mode: rewrite_query # rewrite_query | hypothetical_answer
-  query_rewrite:
-    enabled: true
-    use_llm: true
-    max_variants: 3
-  vector_store:
-    mode: hybrid # bm25 | chroma | hybrid
-    persist_directory: ./chroma_db
-    default_collection: legal_articles
-    top_k: 8
 ```
 
-`query_mode` có 2 mode:
+- `rewrite_query`: LLM viết lại câu hỏi thành truy vấn pháp lý ngắn, rồi gửi sang MCP để search.
+- `hypothetical_answer`: LLM sinh câu trả lời ngắn dự kiến, rồi gửi đoạn đó sang MCP để search.
 
-- `rewrite_query`: LLM viết lại câu hỏi thành truy vấn pháp lý ngắn, rồi embedding truy vấn đó để search.
-- `hypothetical_answer`: LLM sinh câu trả lời ngắn dự kiến, rồi embedding đoạn trả lời đó để search. Cách này giống HyDE, hữu ích khi câu hỏi người dùng quá đời thường.
+## Hợp Đồng Dữ Liệu
 
-## Dataset Record
+MCP tool cần trả đủ metadata để backend dựng lại `LegalArticle`: `id`, `article_id`, `law_id`, `law_name`, `doc_type`, `database`, `chapter`, `article`, `article_title`, `content`, `author`, `extra`, `score`.
 
-```json
-{
-  "id": "44_2013_ND_CP_Dieu_1",
-  "law_id": "44/2013/NĐ-CP",
-  "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
-  "doc_type": "Nghị định",
-  "chapter": "Chương I NHỮNG QUY ĐỊNH CHUNG",
-  "article": "Điều 1",
-  "article_title": "Phạm vi điều chỉnh",
-  "content": "...",
-  "author": "Chính phủ",
-  "extra": [
-    "Nghị định|44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 2"
-  ]
-}
-```
-
-`extra` là các điều luật liên quan. Khi search trúng record, agent dùng `extra` để mở rộng `relevant_articles` và `relevant_docs` một cách deterministic, không để LLM tự đoán nguồn.
-
-## Vector Text
-
-Mỗi record được embedding bằng:
+`extra` dùng format:
 
 ```text
-doc_type + " " + law_id + " " + law_name
-article + " " + article_title
-content
+doc_type|law_id|law_name|article
 ```
 
-`extra` không được embed. Nó chỉ dùng để mở rộng danh sách điều luật liên quan sau retrieval.
+Agent dùng `extra` để gọi `search_relevant`, lấy nội dung điều luật liên quan từ PostgreSQL và đưa thêm vào context trả lời.

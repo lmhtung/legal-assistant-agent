@@ -1,7 +1,7 @@
 """Cấu hình ứng dụng đọc từ ``backend/config.yaml`` và biến môi trường.
 
 File này là nơi gom toàn bộ cấu hình runtime: FastAPI, LLM, embedding,
-PostgreSQL và retrieval/vector store. Các class cấu hình dùng Pydantic để:
+MCP retrieval và fallback vector store local. Các class cấu hình dùng Pydantic để:
 
 - validate kiểu dữ liệu ngay khi app khởi động;
 - có default rõ ràng khi thiếu config;
@@ -69,16 +69,26 @@ class EmbeddingsSettings(ConfigModel):
     model: str = "bge-m3"
 
 
-class PostgreSQLSettings(ConfigModel):
-    """Cấu hình PostgreSQL lưu structured legal records.
+class MCPServerSettings(ConfigModel):
+    """Một MCP server mà backend có thể gọi tool."""
 
-    ``database_url`` là connection string tới container PostgreSQL. Ví dụ port
-    ``25432`` nghĩa là Docker map host:25432 vào container:5432, không phải port
-    của một data API.
+    url: str
+    transport: Literal["http", "streamable_http"] = "http"
+
+
+class MCPRetrievalSettings(ConfigModel):
+    """Cấu hình gọi MCP server cho retrieval bên ngoài backend.
+
+    Backend chỉ cần biết MCP server nào đang chạy. Tên tool là contract cố định
+    giữa backend và legal MCP server, không để người dùng phải chỉnh trong YAML.
     """
 
-    enabled: bool = True
-    database_url: str = "postgresql://user:password@localhost:25432/legal_assistant"
+    enabled: bool = False
+    primary_server: str = "legal_retrieval"
+    servers: dict[str, MCPServerSettings] = Field(default_factory=dict)
+    fallback_to_local: bool = True
+    fetch_related: bool = True
+    related_top_k: int = 16
 
 
 class RetrievalSettings(ConfigModel):
@@ -109,8 +119,8 @@ class VectorStoreSettings(ConfigModel):
         """Chuẩn hóa path Chroma sau khi Pydantic parse xong model.
 
         Người dùng có thể viết ``./chroma_db`` trong YAML. Validator này đổi nó
-        thành absolute path dưới thư mục backend để script import và FastAPI cùng
-        nhìn vào một nơi.
+        thành absolute path dưới thư mục backend để fallback local luôn nhìn đúng
+        vị trí vector index.
         """
 
         if not self.persist_directory.is_absolute():
@@ -132,7 +142,7 @@ class Settings(BaseSettings):
     app: AppSettings = Field(default_factory=AppSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
-    postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
+    mcp_retrieval: MCPRetrievalSettings = Field(default_factory=MCPRetrievalSettings)
     legal_assistant: LegalAssistantSettings = Field(
         default_factory=LegalAssistantSettings,
         validation_alias=AliasChoices("legal_assistant", "legal-assistant"),

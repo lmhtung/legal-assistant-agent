@@ -2,7 +2,7 @@
 
 Agent chạy bốn bước rõ ràng:
 1. rewrite query hoặc sinh hypothetical answer để tối ưu retrieval;
-2. search các kho tri thức đã build theo database được chọn;
+2. search kho tri thức qua MCP hoặc fallback tool local;
 3. tạo câu trả lời grounded từ các điều luật tìm được;
 4. format nguồn theo yêu cầu bài thi, gồm cả mở rộng từ field ``extra``.
 """
@@ -27,11 +27,11 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
     name = "legal-assistant"
     description = "Vietnamese legal retrieval and grounded QA agent"
 
-    def __init__(self, registry: VectorStoreRegistry = vector_store_registry, llm=None) -> None:
-        # registry giữ các vector store đã mở trong process. Với Chroma, store có
-        # thể được mở lazy từ persist_directory đã build trước đó.
+    def __init__(self, registry: VectorStoreRegistry = vector_store_registry, llm=None, mcp_client=None) -> None:
+        # registry giữ tool/vector store local để fallback khi MCP chưa bật hoặc lỗi.
         self.registry = registry
         self.llm = llm
+        self.mcp_client = mcp_client
         self.settings = get_settings()
         self.store_factory = VectorStoreFactory(self.settings.legal_assistant.vector_store)
         super().__init__()
@@ -94,14 +94,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return await self._format_submission_node(state)
 
     async def _rewrite_query_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Chuẩn bị text dùng cho retrieval.
-
-        Nếu config tắt rewrite, agent search trực tiếp bằng câu hỏi gốc. Nếu bật,
-        agent dùng một trong hai mode: ``rewrite_query`` hoặc
-        ``hypothetical_answer``. Text sinh ra sẽ được embed/search thay cho câu
-        hỏi gốc, nhưng câu hỏi gốc vẫn được giữ trong ``query_variants`` để hỗ
-        trợ lexical search.
-        """
+        """Chuẩn bị text dùng cho retrieval."""
 
         context = state.get("context") or AgentContext()
         question = state["question"]
@@ -143,10 +136,9 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return state
 
     async def _retrieve_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Search vector store local và lưu candidate vào state."""
+        """Search qua MCP nếu bật; nếu không thì dùng tool local trong backend."""
 
         context = state.get("context") or AgentContext()
-        self._ensure_databases(context.databases)
         query = RetrievalQuery(
             question=state.get("retrieval_question") or state["question"],
             original_question=state["question"],
@@ -154,17 +146,88 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             databases=context.databases,
             top_k=context.top_k,
         )
-        candidates = self.registry.search(query)
+        candidates = await self._search_with_mcp(query, state)
+        if candidates is None:
+            self._ensure_databases(context.databases)
+            candidates = self.registry.search(query)
+            state.setdefault("tool_calls", []).append(
+                {
+                    "name": "search_legal_articles",
+                    "provider": "backend-local",
+                    "args": query.model_dump(mode="json"),
+                    "num_results": len(candidates),
+                }
+            )
         state["retrieved"] = candidates
         state["selected_articles"] = [candidate.article for candidate in candidates]
-        state.setdefault("tool_calls", []).append(
-            {
-                "name": "search_legal_articles",
-                "args": query.model_dump(mode="json"),
-                "num_results": len(candidates),
-            }
-        )
         return state
+
+    async def _search_with_mcp(
+        self,
+        query: RetrievalQuery,
+        state: LegalAssistantState,
+    ):
+        """Gọi MCP retrieval tools và trả ``None`` nếu cần fallback local."""
+
+        if self.mcp_client is None or not self.settings.mcp_retrieval.enabled:
+            return None
+        try:
+            candidates = await self.mcp_client.search_legal_articles(query)
+            related = await self._search_relevant_with_mcp(candidates, query)
+            merged = self._merge_candidates(candidates, related)
+            state.setdefault("tool_calls", []).append(
+                {
+                    "name": self.mcp_client.search_tool_name,
+                    "provider": "mcp",
+                    "args": query.model_dump(mode="json"),
+                    "num_results": len(candidates),
+                }
+            )
+            if related:
+                state.setdefault("tool_calls", []).append(
+                    {
+                        "name": self.mcp_client.relevant_tool_name,
+                        "provider": "mcp",
+                        "num_results": len(related),
+                    }
+                )
+            return merged
+        except Exception as exc:  # pragma: no cover - MCP là service ngoài
+            state.setdefault("debug", {})["mcp_retrieval_error"] = str(exc)
+            if self.settings.mcp_retrieval.fallback_to_local:
+                return None
+            raise
+
+    async def _search_relevant_with_mcp(
+        self,
+        candidates: list,
+        query: RetrievalQuery,
+    ):
+        """Dùng MCP tool ``search_relevant`` để lấy nội dung điều luật trong extra."""
+
+        if not self.settings.mcp_retrieval.fetch_related:
+            return []
+        refs = sorted({ref for candidate in candidates for ref in candidate.article.extra})
+        if not refs:
+            return []
+        return await self.mcp_client.search_relevant(
+            extra_refs=refs,
+            databases=query.databases,
+            top_k=self.settings.mcp_retrieval.related_top_k,
+        )
+
+    def _merge_candidates(self, primary: list, related: list) -> list:
+        """Gộp kết quả retrieval chính với điều luật liên quan, bỏ trùng article."""
+
+        merged = []
+        seen: set[str] = set()
+        for candidate in [*primary, *related]:
+            article_id = candidate.article.article_id
+            if article_id in seen:
+                continue
+            seen.add(article_id)
+            merged.append(candidate)
+        return merged
 
     async def _generate_answer_node(self, state: LegalAssistantState) -> LegalAssistantState:
         """Sinh câu trả lời cuối cùng từ các điều luật đã retrieve."""
@@ -189,12 +252,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return state
 
     async def _format_submission_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Tạo danh sách nguồn theo format bài thi.
-
-        Với mỗi điều luật được retrieve, agent thêm nguồn chính. Sau đó đọc
-        ``article.extra`` để thêm các điều luật liên quan đã được gắn trong data.
-        Cách này deterministic hơn việc để LLM tự đoán nguồn liên quan.
-        """
+        """Tạo danh sách nguồn theo format bài thi."""
 
         articles = state.get("selected_articles", [])
         docs: list[str] = []
@@ -219,7 +277,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             values.append(value)
 
     def _ensure_databases(self, databases: list[str]) -> None:
-        """Mở store theo database khi request cần nhưng registry chưa có."""
+        """Mở store local theo database khi fallback cần dùng."""
 
         for database in databases:
             if not self.registry.has(database):
@@ -271,11 +329,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
 
 
 def normalize_related_ref(reference: str) -> tuple[str | None, str | None]:
-    """Chuẩn hóa reference trong ``extra`` thành doc_ref và article_ref.
-
-    Format chính là ``doc_type|law_id|law_name|article``. Format cũ
-    ``law_id|law_name|article`` vẫn được chấp nhận để tương thích dữ liệu thử.
-    """
+    """Chuẩn hóa reference trong ``extra`` thành doc_ref và article_ref."""
 
     parts = [part.strip() for part in reference.split("|") if part.strip()]
     if len(parts) == 4:

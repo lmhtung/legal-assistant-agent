@@ -13,9 +13,16 @@ embeddings:
   base_url: http://localhost:8002/v1
   model: bge-m3
 
-postgres:
-  enabled: true
-  database_url: postgresql://user:password@localhost:25432/legal_assistant
+mcp_retrieval:
+  enabled: false
+  primary_server: legal_retrieval
+  servers:
+    legal_retrieval:
+      url: http://localhost:8765/mcp
+      transport: http
+  fallback_to_local: true
+  fetch_related: true
+  related_top_k: 16
 
 legal_assistant:
   retrieval:

@@ -63,6 +63,6 @@ class VectorStoreRegistry:
         return merged[: query.top_k]
 
 
-# Registry dùng chung trong FastAPI process. Dữ liệu bền vững nằm ở PostgreSQL
-# và Chroma; registry chỉ giữ các object store đang mở.
+# Registry dùng chung trong FastAPI process. Dữ liệu bền vững nằm ở hệ
+# thống data/vector store bên ngoài; registry chỉ giữ các object store đang mở.
 vector_store_registry = VectorStoreRegistry()

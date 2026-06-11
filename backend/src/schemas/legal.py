@@ -70,10 +70,10 @@ class LegalArticle(BaseModel):
 
 
 class RetrievedCandidate(BaseModel):
-    """Một kết quả retrieval từ BM25, vector search hoặc hybrid fusion."""
+    """Một kết quả retrieval từ BM25, vector search, hybrid fusion hoặc MCP."""
 
     article: LegalArticle
-    source: Literal["bm25", "vector", "hybrid"] = "bm25"
+    source: Literal["bm25", "vector", "hybrid", "mcp", "related"] = "bm25"
     score: float = 0.0
     rank: int | None = None
     reason: str | None = None
