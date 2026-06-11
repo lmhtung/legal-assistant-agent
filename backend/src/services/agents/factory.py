@@ -1,4 +1,4 @@
-"""Agent factory helpers."""
+"""Factory tạo agent cho ứng dụng."""
 from __future__ import annotations
 
 from src.services.agents.legal_assistant import LegalAssistantAgent
@@ -9,6 +9,6 @@ def create_legal_assistant_agent(
     registry: VectorStoreRegistry = vector_store_registry,
     llm=None,
 ) -> LegalAssistantAgent:
-    """Create the single legal assistant used by the application."""
+    """Tạo legal assistant duy nhất, có thể inject registry/llm khi test."""
 
     return LegalAssistantAgent(registry=registry, llm=llm)

@@ -1,4 +1,4 @@
-"""Lexical retrieval store used as the BM25-like side of hybrid search."""
+"""Lexical retrieval store dùng như nhánh BM25-like của hybrid search."""
 from __future__ import annotations
 
 import math
@@ -11,17 +11,21 @@ _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
 
 def tokenize(text: str) -> list[str]:
-    """Tokenize Vietnamese/legal text with a simple Unicode word regex."""
+    """Tách token đơn giản cho tiếng Việt/văn bản pháp luật.
+
+    Đây không phải Vietnamese tokenizer đầy đủ, nhưng đủ tốt cho tín hiệu exact
+    match như số hiệu văn bản, số điều, thuật ngữ pháp lý và tên riêng.
+    """
 
     return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
 class InMemoryLegalStore:
-    """Small lexical index for keyword-sensitive retrieval.
+    """Index lexical nhỏ, chạy trong RAM.
 
-    This is not a replacement for a production search engine. It gives the
-    hybrid retriever a cheap lexical signal for exact legal terms such as law
-    numbers, article numbers, and named concepts.
+    Store này không thay thế Elasticsearch/OpenSearch. Nó bổ sung tín hiệu từ
+    khóa cho hybrid retrieval, nhất là khi người dùng hỏi đúng số hiệu luật hoặc
+    tên điều mà embedding đôi khi làm mờ.
     """
 
     def __init__(self, database: str = "default") -> None:
@@ -31,7 +35,7 @@ class InMemoryLegalStore:
         self._doc_freqs: Counter[str] = Counter()
 
     def add_articles(self, articles: list[LegalArticle]) -> None:
-        """Index canonical vector text for each structured record."""
+        """Index text chuẩn của từng record vào bộ đếm term frequency."""
 
         for article in articles:
             article.database = article.database or self.database
@@ -40,7 +44,7 @@ class InMemoryLegalStore:
         self._rebuild_doc_freqs()
 
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
-        """Score records with a lightweight TF-IDF/BM25-like formula."""
+        """Tính score TF-IDF/BM25-like cho các record trong RAM."""
 
         query_terms: list[str] = []
         for query_text in query.all_queries:
@@ -75,7 +79,7 @@ class InMemoryLegalStore:
         return scored[: query.top_k]
 
     def _rebuild_doc_freqs(self) -> None:
-        """Recompute document-frequency statistics after updates."""
+        """Tính lại document frequency sau mỗi lần add/update record."""
 
         self._doc_freqs = Counter()
         for terms in self._term_freqs.values():
@@ -83,6 +87,6 @@ class InMemoryLegalStore:
 
 
 def index_text(article: LegalArticle) -> str:
-    """Return the canonical text used by both lexical and vector retrieval."""
+    """Trả text chuẩn dùng chung cho lexical và vector retrieval."""
 
-    return str(article.extra.get("vector_text") or article.vector_text)
+    return article.vector_text

@@ -1,4 +1,4 @@
-"""Vector store exports."""
+"""Export public cho các vector store và registry retrieval."""
 from src.services.vector_store.base import LegalVectorStore, VectorStoreRegistry, vector_store_registry
 from src.services.vector_store.chroma import ChromaLegalStore
 from src.services.vector_store.factory import VectorStoreFactory

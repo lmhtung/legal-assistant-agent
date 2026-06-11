@@ -15,7 +15,7 @@ embeddings:
 
 postgres:
   enabled: true
-  database_url: postgresql://user:password@localhost:5432/legal_assistant
+  database_url: postgresql://user:password@localhost:25432/legal_assistant
 
 legal_assistant:
   retrieval:

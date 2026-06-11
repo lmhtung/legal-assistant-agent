@@ -1,10 +1,10 @@
-"""LangGraph legal assistant agent.
+"""Agent pháp lý chính viết bằng LangGraph/LangChain style.
 
-The agent runs four conceptual steps:
-1. rewrite the query or generate a hypothetical answer for retrieval,
-2. retrieve grounded legal records,
-3. generate a grounded Vietnamese answer,
-4. format references for competition output.
+Agent chạy bốn bước rõ ràng:
+1. rewrite query hoặc sinh hypothetical answer để tối ưu retrieval;
+2. search các kho tri thức đã build theo database được chọn;
+3. tạo câu trả lời grounded từ các điều luật tìm được;
+4. format nguồn theo yêu cầu bài thi, gồm cả mở rộng từ field ``extra``.
 """
 from __future__ import annotations
 
@@ -18,23 +18,26 @@ from src.services.agents.legal_assistant.prompt import (
     build_query_rewrite_prompt,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
-from src.services.vector_store import VectorStoreRegistry, vector_store_registry
+from src.services.vector_store import VectorStoreFactory, VectorStoreRegistry, vector_store_registry
 
 
 class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, LegalAssistantState]):
-    """Single production agent used by this backend."""
+    """Agent production duy nhất của backend hiện tại."""
 
     name = "legal-assistant"
     description = "Vietnamese legal retrieval and grounded QA agent"
 
     def __init__(self, registry: VectorStoreRegistry = vector_store_registry, llm=None) -> None:
+        # registry giữ các vector store đã mở trong process. Với Chroma, store có
+        # thể được mở lazy từ persist_directory đã build trước đó.
         self.registry = registry
         self.llm = llm
         self.settings = get_settings()
+        self.store_factory = VectorStoreFactory(self.settings.legal_assistant.vector_store)
         super().__init__()
 
     def build_initial_state(self, request: LegalAnswerRequest) -> LegalAssistantState:
-        """Create the initial graph state from the public API request."""
+        """Tạo state ban đầu từ request public API."""
 
         rewrite_enabled = self.settings.legal_assistant.query_rewrite.enabled
         context = AgentContext(
@@ -58,12 +61,12 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         state: LegalAssistantState,
         request: LegalAnswerRequest,
     ) -> LegalAnswerResponse:
-        """Convert final graph state into API response shape."""
+        """Đóng gói state cuối cùng thành response API."""
 
         return self._to_response(state, include_debug=request.include_debug)
 
     def _compile_graph(self):
-        """Compile LangGraph if installed; otherwise fallback mode is used."""
+        """Compile LangGraph nếu dependency đã được cài."""
 
         try:
             from langgraph.graph import END, StateGraph
@@ -83,7 +86,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return graph.compile()
 
     async def run_without_graph(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Run the same node order without LangGraph."""
+        """Chạy đúng thứ tự node khi chưa dùng được LangGraph."""
 
         state = await self._rewrite_query_node(state)
         state = await self._retrieve_node(state)
@@ -91,7 +94,14 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return await self._format_submission_node(state)
 
     async def _rewrite_query_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Prepare the text that retrieval will embed/search."""
+        """Chuẩn bị text dùng cho retrieval.
+
+        Nếu config tắt rewrite, agent search trực tiếp bằng câu hỏi gốc. Nếu bật,
+        agent dùng một trong hai mode: ``rewrite_query`` hoặc
+        ``hypothetical_answer``. Text sinh ra sẽ được embed/search thay cho câu
+        hỏi gốc, nhưng câu hỏi gốc vẫn được giữ trong ``query_variants`` để hỗ
+        trợ lexical search.
+        """
 
         context = state.get("context") or AgentContext()
         question = state["question"]
@@ -114,7 +124,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                 candidate = (await self.llm.ainvoke(prompt)).strip()
                 if candidate:
                     retrieval_text = candidate.splitlines()[0].strip(" -\t") or question
-            except Exception as exc:  # pragma: no cover - network/model fallback
+            except Exception as exc:  # pragma: no cover - fallback khi LLM endpoint lỗi
                 state.setdefault("debug", {})[f"{mode}_error"] = str(exc)
 
         if mode == "hypothetical_answer":
@@ -133,9 +143,10 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return state
 
     async def _retrieve_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Call the registered vector stores and keep selected articles in state."""
+        """Search vector store local và lưu candidate vào state."""
 
         context = state.get("context") or AgentContext()
+        self._ensure_databases(context.databases)
         query = RetrievalQuery(
             question=state.get("retrieval_question") or state["question"],
             original_question=state["question"],
@@ -156,7 +167,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return state
 
     async def _generate_answer_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Generate the final answer from retrieved legal records."""
+        """Sinh câu trả lời cuối cùng từ các điều luật đã retrieve."""
 
         articles = state.get("selected_articles", [])
         if not articles:
@@ -172,28 +183,50 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             return state
         try:
             state["answer"] = await self.llm.ainvoke(prompt)
-        except Exception as exc:  # pragma: no cover - network/model fallback
+        except Exception as exc:  # pragma: no cover - fallback khi LLM endpoint lỗi
             state["answer"] = self._fallback_answer(state["question"], articles)
             state.setdefault("debug", {})["llm_error"] = str(exc)
         return state
 
     async def _format_submission_node(self, state: LegalAssistantState) -> LegalAssistantState:
-        """Build competition-compatible document/article reference lists."""
+        """Tạo danh sách nguồn theo format bài thi.
+
+        Với mỗi điều luật được retrieve, agent thêm nguồn chính. Sau đó đọc
+        ``article.extra`` để thêm các điều luật liên quan đã được gắn trong data.
+        Cách này deterministic hơn việc để LLM tự đoán nguồn liên quan.
+        """
 
         articles = state.get("selected_articles", [])
         docs: list[str] = []
         article_refs: list[str] = []
         for article in articles:
-            if article.doc_ref not in docs:
-                docs.append(article.doc_ref)
-            if article.article_ref not in article_refs:
-                article_refs.append(article.article_ref)
+            self._append_reference(article.doc_ref, docs)
+            self._append_reference(article.article_ref, article_refs)
+            for related_ref in sorted(article.extra):
+                doc_ref, article_ref = normalize_related_ref(related_ref)
+                if doc_ref:
+                    self._append_reference(doc_ref, docs)
+                if article_ref:
+                    self._append_reference(article_ref, article_refs)
         state["relevant_docs"] = docs
         state["relevant_articles"] = article_refs
         return state
 
+    def _append_reference(self, value: str, values: list[str]) -> None:
+        """Thêm reference một lần và giữ nguyên thứ tự ranking."""
+
+        if value and value not in values:
+            values.append(value)
+
+    def _ensure_databases(self, databases: list[str]) -> None:
+        """Mở store theo database khi request cần nhưng registry chưa có."""
+
+        for database in databases:
+            if not self.registry.has(database):
+                self.registry.register(database, self.store_factory.create(database))
+
     def _build_query_variants(self, question: str, rewritten: str) -> list[str]:
-        """Keep original and generated retrieval text for lexical search."""
+        """Giữ bản rewrite và câu hỏi gốc để lexical search có thêm tín hiệu."""
 
         variants: list[str] = []
         for item in [rewritten, question]:
@@ -202,7 +235,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return variants[: self.settings.legal_assistant.query_rewrite.max_variants]
 
     def _fallback_answer(self, question: str, articles) -> str:
-        """Deterministic answer used when no LLM is available."""
+        """Câu trả lời deterministic khi không có LLM hoặc LLM lỗi."""
 
         lead = f"Dựa trên các căn cứ đã truy hồi cho câu hỏi: {question}"
         bullets = []
@@ -213,7 +246,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         return "\n".join([lead, *bullets, warning])
 
     def _to_response(self, state: LegalAssistantState, include_debug: bool = False) -> LegalAnswerResponse:
-        """Create the public response object and optional debug payload."""
+        """Tạo response public, chỉ kèm debug khi request yêu cầu."""
 
         debug = state.get("debug", {}).copy() if include_debug else {}
         if include_debug:
@@ -235,3 +268,20 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             selected_articles=state.get("selected_articles", []),
             debug=debug,
         )
+
+
+def normalize_related_ref(reference: str) -> tuple[str | None, str | None]:
+    """Chuẩn hóa reference trong ``extra`` thành doc_ref và article_ref.
+
+    Format chính là ``doc_type|law_id|law_name|article``. Format cũ
+    ``law_id|law_name|article`` vẫn được chấp nhận để tương thích dữ liệu thử.
+    """
+
+    parts = [part.strip() for part in reference.split("|") if part.strip()]
+    if len(parts) == 4:
+        _, law_id, law_name, article = parts
+        return f"{law_id}|{law_name}", f"{law_id}|{law_name}|{article}"
+    if len(parts) == 3:
+        law_id, law_name, article = parts
+        return f"{law_id}|{law_name}", f"{law_id}|{law_name}|{article}"
+    return None, None

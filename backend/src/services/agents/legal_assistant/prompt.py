@@ -1,4 +1,8 @@
-"""Prompt builders for query preparation and grounded answer generation."""
+"""Các hàm build prompt cho agent pháp lý.
+
+Tách prompt khỏi agent giúp dễ chỉnh wording mà không đụng logic graph. Prompt
+được chia thành ba loại: rewrite query, hypothetical answer và grounded answer.
+"""
 from __future__ import annotations
 
 from src.schemas.legal import LegalArticle
@@ -23,11 +27,14 @@ Câu hỏi: {question}
 
 
 def format_article_context(articles: list[LegalArticle]) -> str:
+    """Đổi danh sách điều luật thành context đưa vào prompt trả lời."""
+
     blocks: list[str] = []
     for index, article in enumerate(articles, start=1):
         title = f" - {article.article_title}" if article.article_title else ""
         chapter = f"Chương: {article.chapter}" if article.chapter else "Chương: N/A"
         author = f"Cơ quan ban hành: {article.author}" if article.author else "Cơ quan ban hành: N/A"
+        related = ", ".join(sorted(article.extra)) if article.extra else "N/A"
         blocks.append(
             "\n".join(
                 [
@@ -35,6 +42,7 @@ def format_article_context(articles: list[LegalArticle]) -> str:
                     f"Loại văn bản: {article.doc_type}",
                     chapter,
                     author,
+                    f"Điều luật liên quan: {related}",
                     article.content.strip(),
                 ]
             )
@@ -43,14 +51,20 @@ def format_article_context(articles: list[LegalArticle]) -> str:
 
 
 def build_query_rewrite_prompt(question: str) -> str:
+    """Build prompt yêu cầu LLM viết lại câu hỏi thành truy vấn pháp lý."""
+
     return QUERY_REWRITE_PROMPT.format(question=question)
 
 
 def build_hypothetical_answer_prompt(question: str) -> str:
+    """Build prompt HyDE: sinh câu trả lời ngắn để embedding/search."""
+
     return HYPOTHETICAL_ANSWER_PROMPT.format(question=question)
 
 
 def build_grounded_answer_prompt(question: str, articles: list[LegalArticle]) -> str:
+    """Build prompt trả lời dựa hoàn toàn trên các điều luật đã retrieve."""
+
     context = format_article_context(articles)
     return f"""{SYSTEM_PROMPT}
 

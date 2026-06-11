@@ -1,16 +1,20 @@
-"""OpenAI-compatible chat client wrapper."""
+"""Wrapper cho chat model OpenAI-compatible.
+
+Local vLLM thường expose API tương thích OpenAI, nên dùng ``ChatOpenAI`` của
+LangChain giúp agent gọi model local giống như gọi OpenAI API.
+"""
 from __future__ import annotations
 
 from src.config import settings
 
 
 class LLMClient:
-    """Thin wrapper around LangChain's ChatOpenAI client."""
+    """Client mỏng bọc LangChain ``ChatOpenAI``."""
 
     def __init__(self):
         try:
             from langchain_openai import ChatOpenAI
-        except ImportError as exc:  # pragma: no cover - dependency guard
+        except ImportError as exc:  # pragma: no cover - guard khi thiếu dependency
             raise RuntimeError("Install langchain-openai to use the LLM endpoint") from exc
 
         self.chat = ChatOpenAI(
@@ -22,7 +26,7 @@ class LLMClient:
         )
 
     async def ainvoke(self, prompt: str) -> str:
-        """Call the chat model and return plain text content."""
+        """Gọi chat model bất đồng bộ và trả về plain text."""
 
         response = await self.chat.ainvoke(prompt)
         return response.content

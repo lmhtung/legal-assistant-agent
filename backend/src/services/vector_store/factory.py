@@ -1,4 +1,4 @@
-"""Factory for creating retrieval stores from configuration."""
+"""Factory tạo retrieval store từ cấu hình."""
 from __future__ import annotations
 
 from src.config import VectorStoreSettings
@@ -9,13 +9,13 @@ from src.services.vector_store.in_memory import InMemoryLegalStore
 
 
 class VectorStoreFactory:
-    """Build the configured vector-store implementation for a database."""
+    """Tạo đúng implementation vector store cho từng database logic."""
 
     def __init__(self, settings: VectorStoreSettings) -> None:
         self.settings = settings
 
     def create(self, database: str) -> LegalVectorStore:
-        """Create bm25, chroma, or hybrid store according to config.yaml."""
+        """Tạo store theo ``legal_assistant.vector_store.mode`` trong config.yaml."""
 
         if self.settings.mode == "bm25":
             return InMemoryLegalStore(database=database)

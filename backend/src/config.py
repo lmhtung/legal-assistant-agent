@@ -1,8 +1,12 @@
-"""Application configuration loaded from ``backend/config.yaml``.
+"""Cấu hình ứng dụng đọc từ ``backend/config.yaml`` và biến môi trường.
 
-Only settings required by the structured-dataset pipeline are kept here:
-FastAPI app settings, OpenAI-compatible LLM/embedding endpoints, PostgreSQL,
-and retrieval/vector-store options.
+File này là nơi gom toàn bộ cấu hình runtime: FastAPI, LLM, embedding,
+PostgreSQL và retrieval/vector store. Các class cấu hình dùng Pydantic để:
+
+- validate kiểu dữ liệu ngay khi app khởi động;
+- có default rõ ràng khi thiếu config;
+- cho phép override bằng biến môi trường dạng ``SECTION__FIELD=value``;
+- tránh truyền dict thô rời rạc khắp codebase.
 """
 from __future__ import annotations
 
@@ -18,32 +22,37 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+# PRJ_ROOT trỏ tới thư mục backend. Các path tương đối trong config.yaml sẽ được
+# resolve dựa trên thư mục này để chạy từ đâu cũng ổn định.
 PRJ_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = PRJ_ROOT / "config.yaml"
 
 
 class ConfigModel(BaseModel):
-    """Base class for nested config blocks.
+    """BaseModel chung cho các block config con.
 
-    ``extra='ignore'`` lets config.yaml contain harmless future keys while the
-    code only reads fields explicitly declared here.
+    ``extra='ignore'`` giúp config.yaml có thể chứa key mới trong tương lai mà
+    code cũ không bị crash. ``populate_by_name=True`` cho phép dùng cả alias
+    và tên field Python khi validate.
     """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
 class AppSettings(ConfigModel):
-    """FastAPI host/port settings."""
+    """Cấu hình host/port mặc định cho FastAPI agent service."""
 
     host: str = "0.0.0.0"
     port: int = 8000
 
 
 class LLMSettings(ConfigModel):
-    """OpenAI-compatible chat model settings, backed by the local vLLM server."""
+    """Cấu hình chat model OpenAI-compatible, thường trỏ tới vLLM local."""
 
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8001/v1"
+    # AliasChoices cho phép config.yaml dùng ``default_model`` hoặc
+    # ``model_name`` mà code vẫn đọc về cùng một field.
     model_name: str = Field(
         "qwen3-8b-fp8",
         validation_alias=AliasChoices("model_name", "default_model"),
@@ -53,7 +62,7 @@ class LLMSettings(ConfigModel):
 
 
 class EmbeddingsSettings(ConfigModel):
-    """OpenAI-compatible embedding model settings, backed by the local server."""
+    """Cấu hình embedding endpoint OpenAI-compatible."""
 
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8002/v1"
@@ -61,20 +70,25 @@ class EmbeddingsSettings(ConfigModel):
 
 
 class PostgreSQLSettings(ConfigModel):
-    """PostgreSQL storage for structured legal records."""
+    """Cấu hình PostgreSQL lưu structured legal records.
+
+    ``database_url`` là connection string tới container PostgreSQL. Ví dụ port
+    ``25432`` nghĩa là Docker map host:25432 vào container:5432, không phải port
+    của một data API.
+    """
 
     enabled: bool = True
-    database_url: str = "postgresql://user:password@localhost:5432/legal_assistant"
+    database_url: str = "postgresql://user:password@localhost:25432/legal_assistant"
 
 
 class RetrievalSettings(ConfigModel):
-    """Controls which text is embedded at query time before retrieval."""
+    """Chọn cách tạo text đem đi embedding/search trước retrieval."""
 
     query_mode: Literal["rewrite_query", "hypothetical_answer"] = "rewrite_query"
 
 
 class QueryRewriteSettings(ConfigModel):
-    """Controls the LLM rewrite/HyDE pre-retrieval step."""
+    """Bật/tắt bước LLM rewrite hoặc HyDE trước khi truy hồi."""
 
     enabled: bool = True
     use_llm: bool = True
@@ -82,7 +96,7 @@ class QueryRewriteSettings(ConfigModel):
 
 
 class VectorStoreSettings(ConfigModel):
-    """Vector and hybrid retrieval settings."""
+    """Cấu hình backend retrieval: lexical, Chroma vector hoặc hybrid."""
 
     mode: Literal["bm25", "chroma", "hybrid"] = "hybrid"
     persist_directory: Path = Path("./chroma_db")
@@ -92,7 +106,12 @@ class VectorStoreSettings(ConfigModel):
 
     @model_validator(mode="after")
     def resolve_persist_directory(self):
-        """Resolve a relative Chroma path against the backend directory."""
+        """Chuẩn hóa path Chroma sau khi Pydantic parse xong model.
+
+        Người dùng có thể viết ``./chroma_db`` trong YAML. Validator này đổi nó
+        thành absolute path dưới thư mục backend để script import và FastAPI cùng
+        nhìn vào một nơi.
+        """
 
         if not self.persist_directory.is_absolute():
             self.persist_directory = PRJ_ROOT / self.persist_directory
@@ -100,7 +119,7 @@ class VectorStoreSettings(ConfigModel):
 
 
 class LegalAssistantSettings(ConfigModel):
-    """Top-level legal assistant settings."""
+    """Nhóm cấu hình riêng cho agent pháp lý."""
 
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
@@ -108,7 +127,7 @@ class LegalAssistantSettings(ConfigModel):
 
 
 class Settings(BaseSettings):
-    """Root settings object used by the application."""
+    """Root settings object được inject vào toàn bộ ứng dụng."""
 
     app: AppSettings = Field(default_factory=AppSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
@@ -135,7 +154,11 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> Tuple[PydanticBaseSettingsSource, ...]:
-        """Read init/env/dotenv first, then YAML, then file secrets."""
+        """Quy định thứ tự đọc config.
+
+        Thứ tự này cho phép tham số truyền trực tiếp và biến môi trường ghi đè
+        YAML, rất hữu ích khi deploy bằng Docker/Kubernetes.
+        """
 
         return (
             init_settings,
@@ -148,9 +171,10 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a cached settings object for dependency injection."""
+    """Trả về settings đã cache để không parse YAML nhiều lần."""
 
     return Settings()
 
 
+# Biến tiện ích cho các module đơn giản cần đọc config trực tiếp.
 settings = get_settings()

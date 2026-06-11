@@ -1,1 +1,1 @@
-"""Backend source package."""
+"""Package backend cho legal assistant agent."""

@@ -1,1 +1,1 @@
-"""Pydantic schema package."""
+"""Schema Pydantic dùng cho API, dataset và retrieval."""

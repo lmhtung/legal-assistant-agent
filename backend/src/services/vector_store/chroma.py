@@ -1,6 +1,7 @@
-"""Chroma vector store for structured legal records."""
+"""Vector store Chroma cho structured legal records."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -11,14 +12,14 @@ _NON_WORD_RE = re.compile(r"[^\w]+")
 
 
 def safe_collection_name(value: str) -> str:
-    """Convert arbitrary database names into Chroma-safe collection names."""
+    """Đổi tên database bất kỳ thành tên collection hợp lệ cho Chroma."""
 
     name = _NON_WORD_RE.sub("_", value.lower()).strip("_")
     return name[:60] or "legal_articles"
 
 
 class ChromaLegalStore:
-    """Persistent vector store backed by Chroma and the local embedding endpoint."""
+    """Persistent vector store dùng Chroma và embedding endpoint local."""
 
     def __init__(
         self,
@@ -29,7 +30,7 @@ class ChromaLegalStore:
     ) -> None:
         try:
             import chromadb
-        except ImportError as exc:  # pragma: no cover - dependency guard
+        except ImportError as exc:  # pragma: no cover - guard khi thiếu dependency
             raise RuntimeError("Install chromadb to use ChromaLegalStore") from exc
 
         self.database = database
@@ -41,7 +42,7 @@ class ChromaLegalStore:
         )
 
     def add_articles(self, articles: list[LegalArticle]) -> None:
-        """Embed and upsert structured records into Chroma."""
+        """Embed và upsert record vào Chroma."""
 
         if not articles:
             return
@@ -54,7 +55,7 @@ class ChromaLegalStore:
         )
 
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
-        """Embed the retrieval text and return nearest legal records."""
+        """Embed query rồi lấy các record gần nhất theo cosine distance."""
 
         result = self.collection.query(
             query_embeddings=[self.embeddings.embed_query(query.question)],
@@ -67,7 +68,7 @@ class ChromaLegalStore:
         return candidates[: query.top_k]
 
     def _metadata(self, article: LegalArticle) -> dict[str, Any]:
-        """Serialize record fields Chroma can store as metadata."""
+        """Serialize các field Chroma cho phép lưu trong metadata."""
 
         return {
             "id": article.id,
@@ -80,11 +81,12 @@ class ChromaLegalStore:
             "article_title": article.article_title or "",
             "content": article.content,
             "author": article.author or "",
+            "extra": json.dumps(sorted(article.extra), ensure_ascii=False),
             "vector_text": index_text(article),
         }
 
     def _to_candidates(self, result: dict[str, Any]) -> list[RetrievedCandidate]:
-        """Convert Chroma query output into retrieval candidates."""
+        """Chuyển output thô của Chroma thành ``RetrievedCandidate``."""
 
         candidates: list[RetrievedCandidate] = []
         ids = result.get("ids", [[]])[0]
@@ -104,7 +106,7 @@ class ChromaLegalStore:
                 article_title=str(metadata.get("article_title") or "") or None,
                 content=str(metadata.get("content") or ""),
                 author=str(metadata.get("author") or "") or None,
-                extra={"vector_text": str(metadata.get("vector_text") or "")},
+                extra=set(json.loads(str(metadata.get("extra") or "[]"))),
                 score=score,
             )
             candidates.append(RetrievedCandidate(article=article, source="vector", score=score))
@@ -112,6 +114,6 @@ class ChromaLegalStore:
 
 
 def index_text(article: LegalArticle) -> str:
-    """Return canonical text used for embedding structured records."""
+    """Trả text chuẩn được embed cho mỗi record."""
 
-    return str(article.extra.get("vector_text") or article.vector_text)
+    return article.vector_text

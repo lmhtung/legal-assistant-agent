@@ -1,4 +1,4 @@
-"""Legal assistant HTTP endpoints."""
+"""Các HTTP endpoint phục vụ hỏi đáp pháp lý."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
@@ -16,7 +16,7 @@ async def answer_question(
     request: LegalAnswerRequest,
     agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
 ) -> LegalAnswerResponse:
-    """Answer a single legal question."""
+    """Trả lời một câu hỏi pháp lý đơn lẻ bằng agent chính."""
 
     return await agent.answer(request)
 
@@ -26,7 +26,11 @@ async def chat(
     request: ChatRequest,
     agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
 ) -> ChatResponse:
-    """Chat-style wrapper around the same legal answer flow."""
+    """Wrapper dạng chat cho cùng luồng ``LegalAnswerRequest``.
+
+    Endpoint này tiện cho UI hội thoại: request dùng ``message`` thay vì
+    ``question`` và response trả kèm ``tool_calls`` để debug quá trình retrieve.
+    """
 
     answer = await agent.answer(
         LegalAnswerRequest(
@@ -49,7 +53,7 @@ async def answer_batch(
     request: CompetitionBatchRequest,
     agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
 ) -> CompetitionBatchResponse:
-    """Answer many questions and keep the response exportable to results.json."""
+    """Trả lời nhiều câu hỏi, phù hợp khi chạy tập test của cuộc thi."""
 
     results = [await agent.answer(item) for item in request.items]
     return CompetitionBatchResponse(results=results)

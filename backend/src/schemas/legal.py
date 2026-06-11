@@ -1,4 +1,9 @@
-"""Pydantic schemas for retrieval and answer generation."""
+"""Schema Pydantic cho retrieval và trả lời pháp lý.
+
+Các schema ở đây là hợp đồng dữ liệu của runtime agent: request từ API, record
+đã normalize để prompt/search, candidate sau retrieval và response theo format
+có thể xuất ra bài thi.
+"""
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -7,7 +12,11 @@ from pydantic import BaseModel, Field, computed_field
 
 
 class LegalArticle(BaseModel):
-    """A normalized legal knowledge unit used by retrieval and answer prompts."""
+    """Một đơn vị tri thức pháp luật đã chuẩn hóa để agent sử dụng.
+
+    ``article_id`` là id dùng trong vector store. ``database`` là nhóm pháp luật
+    logic. ``score`` chỉ có sau retrieval, không bắt buộc khi import.
+    """
 
     id: str
     article_id: str
@@ -20,27 +29,27 @@ class LegalArticle(BaseModel):
     article_title: str | None = None
     content: str
     author: str | None = None
-    extra: dict[str, Any] = Field(default_factory=dict)
+    extra: set[str] = Field(default_factory=set)
     score: float | None = None
 
     @computed_field
     @property
     def doc_ref(self) -> str:
-        """Competition document reference: ``law_id|law_name``."""
+        """Reference văn bản theo format bài thi: ``law_id|law_name``."""
 
         return f"{self.law_id}|{self.law_name}"
 
     @computed_field
     @property
     def article_ref(self) -> str:
-        """Competition article reference: ``law_id|law_name|Điều X``."""
+        """Reference điều luật theo format bài thi: ``law_id|law_name|Điều X``."""
 
         return f"{self.law_id}|{self.law_name}|{self.article}"
 
     @computed_field
     @property
     def title_text(self) -> str:
-        """Compact title string for display/debugging."""
+        """Chuỗi tiêu đề gọn để debug hoặc hiển thị nội bộ."""
 
         values = [self.doc_type, self.law_id, self.law_name, self.chapter, self.article, self.article_title]
         return " ".join(item for item in values if item)
@@ -48,7 +57,7 @@ class LegalArticle(BaseModel):
     @computed_field
     @property
     def vector_text(self) -> str:
-        """Canonical text embedded for vector retrieval."""
+        """Text chuẩn được embed vào vector database."""
 
         title_line = " ".join(item for item in [self.article, self.article_title] if item)
         return "\n".join(
@@ -61,7 +70,7 @@ class LegalArticle(BaseModel):
 
 
 class RetrievedCandidate(BaseModel):
-    """One retrieval hit from BM25, vector search, or hybrid fusion."""
+    """Một kết quả retrieval từ BM25, vector search hoặc hybrid fusion."""
 
     article: LegalArticle
     source: Literal["bm25", "vector", "hybrid"] = "bm25"
@@ -71,7 +80,7 @@ class RetrievedCandidate(BaseModel):
 
 
 class RetrievalQuery(BaseModel):
-    """Internal retrieval request sent to registered vector stores."""
+    """Query nội bộ gửi tới các vector store đã đăng ký."""
 
     question: str
     original_question: str | None = None
@@ -81,7 +90,12 @@ class RetrievalQuery(BaseModel):
 
     @property
     def all_queries(self) -> list[str]:
-        """Deduplicate rewritten/original query variants for lexical search."""
+        """Gộp query rewrite, câu hỏi gốc và biến thể, đồng thời bỏ trùng.
+
+        Lexical search cần nhiều biến thể hơn vector search vì exact keyword như
+        số hiệu luật hoặc tên điều có thể nằm ở câu hỏi gốc nhưng mất trong bản
+        rewrite.
+        """
 
         values: list[str] = []
         for item in [self.question, self.original_question, *self.query_variants]:
@@ -91,7 +105,7 @@ class RetrievalQuery(BaseModel):
 
 
 class LegalAnswerRequest(BaseModel):
-    """API request for one legal question."""
+    """API request cho một câu hỏi pháp lý."""
 
     id: int | None = None
     question: str
@@ -101,7 +115,7 @@ class LegalAnswerRequest(BaseModel):
 
 
 class LegalAnswerResponse(BaseModel):
-    """Grounded answer plus competition-compatible references."""
+    """Câu trả lời grounded kèm nguồn theo format bài thi."""
 
     id: int | None = None
     question: str
@@ -112,7 +126,7 @@ class LegalAnswerResponse(BaseModel):
     debug: dict[str, Any] = Field(default_factory=dict)
 
     def to_competition_record(self) -> dict[str, Any]:
-        """Return only fields expected by the competition ``results.json``."""
+        """Chỉ giữ các field cần thiết khi xuất ``results.json``."""
 
         return {
             "id": self.id,
@@ -124,17 +138,17 @@ class LegalAnswerResponse(BaseModel):
 
 
 class BatchLegalAnswerRequest(BaseModel):
-    """Batch answer request for test sets."""
+    """Request batch cho tập test nhiều câu hỏi."""
 
     items: list[LegalAnswerRequest]
 
 
 class BatchLegalAnswerResponse(BaseModel):
-    """Batch answer response with a helper for exporting results.json."""
+    """Response batch có helper xuất toàn bộ kết quả ra JSON submit."""
 
     results: list[LegalAnswerResponse]
 
     def to_results_json(self) -> list[dict[str, Any]]:
-        """Convert every response to the competition JSON shape."""
+        """Chuyển mọi response sang format bài thi."""
 
         return [item.to_competition_record() for item in self.results]

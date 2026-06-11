@@ -1,4 +1,4 @@
-"""Hybrid retrieval by fusing lexical and vector rankings."""
+"""Hybrid retrieval bằng cách fusion lexical rank và vector rank."""
 from __future__ import annotations
 
 from src.schemas.legal import LegalArticle, RetrievalQuery, RetrievedCandidate
@@ -6,7 +6,7 @@ from src.services.vector_store.base import LegalVectorStore
 
 
 class HybridLegalStore:
-    """Combine BM25-like and vector search with Reciprocal Rank Fusion."""
+    """Kết hợp BM25-like search và vector search bằng Reciprocal Rank Fusion."""
 
     def __init__(self, lexical_store: LegalVectorStore, vector_store: LegalVectorStore, rrf_k: int = 60) -> None:
         self.lexical_store = lexical_store
@@ -14,13 +14,13 @@ class HybridLegalStore:
         self.rrf_k = rrf_k
 
     def add_articles(self, articles: list[LegalArticle]) -> None:
-        """Index the same records in both retrieval backends."""
+        """Index cùng record vào cả hai backend retrieval."""
 
         self.lexical_store.add_articles(articles)
         self.vector_store.add_articles(articles)
 
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
-        """Merge lexical/vector ranks into one stable candidate list."""
+        """Merge ranking lexical/vector thành một danh sách ổn định."""
 
         merged: dict[str, RetrievedCandidate] = {}
         scores: dict[str, float] = {}

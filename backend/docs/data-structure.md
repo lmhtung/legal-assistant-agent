@@ -1,10 +1,8 @@
 # Data Structure
 
-Tài liệu này mô tả cấu trúc dataset tri thức pháp luật mà backend sử dụng.
+Dataset là các record pháp luật đã xử lý sẵn. Backend không xử lý raw PDF/OCR trong luồng chính.
 
 ## Record Chuẩn
-
-Mỗi record tương ứng một điều/khoản/mục pháp luật đã được xử lý sẵn.
 
 ```json
 {
@@ -17,28 +15,40 @@ Mỗi record tương ứng một điều/khoản/mục pháp luật đã đượ
   "article_title": "Phạm vi điều chỉnh",
   "content": "Nghị định này quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động.",
   "author": "Chính phủ",
-  "extra": {}
+  "extra": [
+    "Nghị định|44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 2"
+  ]
 }
 ```
 
-## Ý Nghĩa Field
+## Field `extra`
 
-| Field | Bắt buộc | Mô tả |
-|---|---:|---|
-| `id` | Có | ID ổn định của record, dùng làm primary key PostgreSQL và vector id. |
-| `law_id` | Có | Mã văn bản pháp luật, ví dụ `44/2013/NĐ-CP`. |
-| `law_name` | Có | Tên/trích yếu văn bản. |
-| `doc_type` | Có | Loại văn bản, ví dụ `Luật`, `Nghị định`, `Thông tư`. |
-| `chapter` | Không | Chương/phần/mục lớn nếu có. |
-| `article` | Có | Điều/khoản/mục chính, ví dụ `Điều 1`. |
-| `article_title` | Không | Tiêu đề điều. |
-| `content` | Có | Nội dung pháp luật đã làm sạch. |
-| `author` | Không | Cơ quan ban hành, ví dụ `Quốc hội`, `Chính phủ`. |
-| `extra` | Không | Metadata mở rộng. |
+`extra` là tập/danh sách các điều luật liên quan đến record hiện tại.
+
+Format từng phần tử:
+
+```text
+doc_type|law_id|law_name|article
+```
+
+Ví dụ:
+
+```text
+Nghị định|44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 2
+```
+
+Khi retrieval tìm được `Điều 1`, agent sẽ:
+
+1. thêm `Điều 1` vào `relevant_articles`;
+2. đọc `extra` của `Điều 1`;
+3. chuẩn hóa mỗi item thành `law_id|law_name|article`;
+4. thêm các điều liên quan vào `relevant_articles` và `relevant_docs`.
+
+Nhờ vậy phần nguồn liên quan được kiểm soát bằng data, không phụ thuộc LLM.
 
 ## Vector Text
 
-Backend không embed JSON thô. Nó build text chuẩn:
+Text dùng để embedding:
 
 ```text
 {doc_type} {law_id} {law_name}
@@ -46,19 +56,11 @@ Backend không embed JSON thô. Nó build text chuẩn:
 {content}
 ```
 
-Ví dụ:
+Không đưa `extra` vào embedding vì `extra` là quan hệ pháp lý, không phải nội dung chính của điều luật.
 
-```text
-Nghị định 44/2013/NĐ-CP Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động
-Điều 1 Phạm vi điều chỉnh
-Nghị định này quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động.
-```
+## PostgreSQL
 
-## Lưu Trữ PostgreSQL
-
-Bảng mặc định: `legal_knowledge_records`.
-
-Các cột chính:
+Bảng: `legal_knowledge_records`.
 
 ```text
 id TEXT PRIMARY KEY
@@ -70,29 +72,7 @@ article TEXT
 article_title TEXT
 content TEXT
 author TEXT
-extra JSONB
+extra JSONB       -- JSON array các related refs
 vector_text TEXT
 updated_at TIMESTAMPTZ
-```
-
-## Output Cuộc Thi
-
-Từ record, backend sinh reference theo format:
-
-```text
-relevant_docs: law_id|law_name
-relevant_articles: law_id|law_name|article
-```
-
-Ví dụ:
-
-```json
-{
-  "relevant_docs": [
-    "44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động"
-  ],
-  "relevant_articles": [
-    "44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 1"
-  ]
-}
 ```

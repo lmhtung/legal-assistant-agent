@@ -1,4 +1,4 @@
-"""LangChain tool wrappers for legal retrieval."""
+"""Tool wrapper cho legal retrieval nếu muốn dùng theo style LangChain tools."""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -8,7 +8,7 @@ from src.services.vector_store import VectorStoreRegistry, vector_store_registry
 
 
 class SearchLegalArticlesInput(BaseModel):
-    """Input schema for the search_legal_articles tool."""
+    """Schema input cho tool ``search_legal_articles``."""
 
     question: str = Field(..., description="Legal question in Vietnamese")
     databases: list[str] = Field(default_factory=lambda: ["default"])
@@ -21,7 +21,7 @@ def search_legal_articles(
     top_k: int = 8,
     registry: VectorStoreRegistry = vector_store_registry,
 ) -> list[dict]:
-    """Search registered legal databases and return JSON-serializable hits."""
+    """Search các legal database đã đăng ký và trả kết quả JSON-serializable."""
 
     query = RetrievalQuery(question=question, databases=databases or ["default"], top_k=top_k)
     candidates = registry.search(query)
@@ -29,7 +29,11 @@ def search_legal_articles(
 
 
 def build_search_legal_articles_tool(registry: VectorStoreRegistry = vector_store_registry):
-    """Create a LangChain StructuredTool when langchain-core is installed."""
+    """Tạo LangChain StructuredTool nếu ``langchain-core`` có sẵn.
+
+    Nếu dependency chưa cài, hàm trả về callable thường để phần còn lại của code
+    vẫn chạy được trong môi trường test nhẹ.
+    """
 
     try:
         from langchain_core.tools import StructuredTool
@@ -42,6 +46,8 @@ def build_search_legal_articles_tool(registry: VectorStoreRegistry = vector_stor
         )
 
     def _run(question: str, databases: list[str] | None = None, top_k: int = 8) -> list[dict]:
+        """Adapter đồng bộ đúng signature mà StructuredTool mong đợi."""
+
         return search_legal_articles(
             question=question,
             databases=databases,

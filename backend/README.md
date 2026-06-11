@@ -1,64 +1,125 @@
 # Legal Assistant Backend
 
-Backend này phục vụ bài toán truy hồi và hỏi đáp pháp luật tiếng Việt trên **dataset đã xử lý sẵn**. Hệ thống không xử lý raw PDF, không OCR, không chunk markdown trong API chính. Tri thức đầu vào là các record JSON có cấu trúc rõ ràng.
-
-## Luồng Xử Lý Chính
+Backend được chia thành 2 luồng, nhưng chỉ có agent là HTTP service:
 
 ```text
-Structured JSON/JSONL dataset
-        ↓
-POST /api/v1/dataset/import
-        ↓
-PostgreSQL lưu record gốc + vector_text
-        ↓
-Vector store index record theo vector_text
-        ↓
-POST /api/v1/legal/answer hoặc /batch
-        ↓
-Agent rewrite query hoặc sinh hypothetical answer
-        ↓
-Hybrid retrieval: BM25-like + Chroma vector search
-        ↓
-LLM sinh câu trả lời grounded trên điều luật đã truy hồi
-        ↓
-Response có answer, relevant_docs, relevant_articles
+Offline Data Builder -> structured dataset -> PostgreSQL + vector index
+Agent Service        -> question -> rewrite/HyDE -> retrieval -> grounded answer
 ```
 
-## Cấu Hình
+Data flow và prompt flow tách biệt. Data builder tự xử lý import/index dữ liệu, còn agent service chỉ đọc kho đã được build để trả lời.
 
-File cấu hình chính: `backend/config.yaml`.
+## 1. Offline Data Builder
 
-Các block quan trọng:
+Data builder không chạy port riêng và không expose endpoint. Nó là job nội bộ dùng khi cần thêm hoặc rebuild dữ liệu.
+
+Nhiệm vụ:
+
+- Đọc structured legal dataset dạng JSON/JSONL.
+- Lưu record vào PostgreSQL nếu `postgres.enabled=true`.
+- Tạo vector index từ `vector_text`.
+- Chia dữ liệu theo `database` logic, ví dụ `labor`, `civil`, `criminal`.
+
+Chạy import:
+
+```bash
+cd backend
+PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl
+```
+
+Nếu chỉ muốn build vector hoặc chỉ muốn lưu PostgreSQL:
+
+```bash
+PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl --skip-postgres
+PYTHONPATH=. python scripts/import_dataset.py --database labor --input data/labor.jsonl --skip-vector
+```
+
+PostgreSQL dùng Docker như bạn đang chạy thì chỉ cần cấu hình đúng `postgres.database_url`, ví dụ port mapping `0.0.0.0:25432->5432/tcp` tương ứng với:
 
 ```yaml
-llm:
-  base_url: http://localhost:8001/v1
-  default_model: qwen3-8b-fp8
-
-embeddings:
-  base_url: http://localhost:8002/v1
-  model: bge-m3
-
 postgres:
   enabled: true
-  database_url: postgresql://user:password@localhost:5432/legal_assistant
+  database_url: postgresql://user:password@localhost:25432/legal_assistant
+```
 
+`25432` ở đây là port PostgreSQL, không phải port service data.
+
+## 2. Agent Service
+
+Agent Service là FastAPI runtime, mặc định port `8000`.
+
+Nhiệm vụ:
+
+- Nhận câu hỏi người dùng.
+- Rewrite query hoặc sinh hypothetical answer theo config.
+- Search các vector store đã build theo `databases` được chọn.
+- Prompt LLM với các điều luật đã tìm được.
+- Trả `answer`, `relevant_docs`, `relevant_articles` theo format bài thi.
+
+Chạy agent:
+
+```bash
+cd backend
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Endpoint chính:
+
+```text
+POST /api/v1/legal/answer
+POST /api/v1/legal/batch
+POST /api/v1/legal/chat
+GET  /health
+```
+
+## Config
+
+File: `backend/config.yaml`.
+
+```yaml
 legal_assistant:
   retrieval:
     query_mode: rewrite_query # rewrite_query | hypothetical_answer
+  query_rewrite:
+    enabled: true
+    use_llm: true
+    max_variants: 3
   vector_store:
     mode: hybrid # bm25 | chroma | hybrid
+    persist_directory: ./chroma_db
+    default_collection: legal_articles
+    top_k: 8
 ```
 
-## Retrieval Modes
+`query_mode` có 2 mode:
 
-`rewrite_query`: LLM viết lại câu hỏi thành truy vấn ngắn, giàu từ khóa pháp luật hơn. Text rewrite được embed và search.
+- `rewrite_query`: LLM viết lại câu hỏi thành truy vấn pháp lý ngắn, rồi embedding truy vấn đó để search.
+- `hypothetical_answer`: LLM sinh câu trả lời ngắn dự kiến, rồi embedding đoạn trả lời đó để search. Cách này giống HyDE, hữu ích khi câu hỏi người dùng quá đời thường.
 
-`hypothetical_answer`: LLM sinh một đoạn trả lời ngắn giả định. Đoạn này thường giàu ngữ nghĩa hơn câu hỏi, nên được embed và search kiểu HyDE.
+## Dataset Record
+
+```json
+{
+  "id": "44_2013_ND_CP_Dieu_1",
+  "law_id": "44/2013/NĐ-CP",
+  "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
+  "doc_type": "Nghị định",
+  "chapter": "Chương I NHỮNG QUY ĐỊNH CHUNG",
+  "article": "Điều 1",
+  "article_title": "Phạm vi điều chỉnh",
+  "content": "...",
+  "author": "Chính phủ",
+  "extra": [
+    "Nghị định|44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 2"
+  ]
+}
+```
+
+`extra` là các điều luật liên quan. Khi search trúng record, agent dùng `extra` để mở rộng `relevant_articles` và `relevant_docs` một cách deterministic, không để LLM tự đoán nguồn.
 
 ## Vector Text
 
-Mỗi record được embedding bằng công thức cố định:
+Mỗi record được embedding bằng:
 
 ```text
 doc_type + " " + law_id + " " + law_name
@@ -66,132 +127,4 @@ article + " " + article_title
 content
 ```
 
-Ví dụ:
-
-```text
-Nghị định 44/2013/NĐ-CP Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động
-Điều 1 Phạm vi điều chỉnh
-Nghị định này quy định chi tiết thi hành...
-```
-
-## API
-
-### Health
-
-```http
-GET /health
-```
-
-### Import Dataset
-
-```http
-POST /api/v1/dataset/import
-```
-
-Body có thể truyền `records` trực tiếp:
-
-```json
-{
-  "database": "labor",
-  "save_to_postgres": true,
-  "index_vector_store": true,
-  "records": [
-    {
-      "id": "44_2013_ND_CP_Dieu_1",
-      "law_id": "44/2013/NĐ-CP",
-      "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
-      "doc_type": "Nghị định",
-      "chapter": "Chương I NHỮNG QUY ĐỊNH CHUNG",
-      "article": "Điều 1",
-      "article_title": "Phạm vi điều chỉnh",
-      "content": "Nghị định này quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động.",
-      "author": "Chính phủ"
-    }
-  ]
-}
-```
-
-Hoặc truyền `input_path` tới file JSON/JSONL local:
-
-```json
-{
-  "database": "labor",
-  "input_path": "/path/to/legal_records.jsonl",
-  "save_to_postgres": true,
-  "index_vector_store": true
-}
-```
-
-### Answer
-
-```http
-POST /api/v1/legal/answer
-```
-
-```json
-{
-  "id": 1,
-  "question": "Phạm vi điều chỉnh của hợp đồng lao động được quy định ở đâu?",
-  "databases": ["labor"],
-  "top_k": 8,
-  "include_debug": true
-}
-```
-
-Response chính:
-
-```json
-{
-  "id": 1,
-  "question": "...",
-  "answer": "...",
-  "relevant_docs": ["44/2013/NĐ-CP|..."],
-  "relevant_articles": ["44/2013/NĐ-CP|...|Điều 1"],
-  "selected_articles": []
-}
-```
-
-### Batch
-
-```http
-POST /api/v1/legal/batch
-```
-
-Dùng để chạy tập test và xuất `results.json`.
-
-## Chạy Backend
-
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-Điều kiện cần:
-
-- PostgreSQL chạy và đúng `postgres.database_url`.
-- LLM endpoint OpenAI-compatible chạy ở `llm.base_url`.
-- Embedding endpoint OpenAI-compatible chạy ở `embeddings.base_url`.
-
-## Cấu Trúc Code
-
-```text
-src/
-  config.py                  # typed config từ config.yaml
-  main.py                    # FastAPI app factory
-  dependencies.py            # singleton dependencies cho FastAPI
-  routers/
-    dataset.py               # import structured records
-    legal.py                 # answer/chat/batch
-    health.py                # health check
-  schemas/
-    knowledge.py             # dataset import schema
-    legal.py                 # retrieval/answer schema
-    api/chat.py              # chat/batch API schema
-  services/
-    dataset/                 # PostgreSQL + vector indexing service
-    vector_store/            # BM25-like, Chroma, hybrid retrieval
-    agents/                  # BaseAgent + LegalAssistantAgent
-    llm/                     # ChatOpenAI wrapper
-    embeddings/              # OpenAIEmbeddings wrapper
-```
+`extra` không được embed. Nó chỉ dùng để mở rộng danh sách điều luật liên quan sau retrieval.

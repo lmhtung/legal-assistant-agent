@@ -1,4 +1,9 @@
-"""Base agent contract shared by concrete agents."""
+"""Base class chung cho mọi agent trong hệ thống.
+
+Hiện tại project chỉ dùng một agent pháp lý, nhưng vẫn giữ base class để chuẩn
+hóa lifecycle: request -> state -> graph/fallback -> response. Khi muốn nâng cấp
+agent hoặc thêm agent mới, chỉ cần override các điểm mở rộng ở đây.
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -14,27 +19,30 @@ StateT = TypeVar("StateT", bound=AgentState)
 
 
 class BaseAgent(ABC, Generic[RequestT, ResponseT, StateT]):
-    """Common lifecycle for agent implementations.
+    """Khung chạy chung cho agent.
 
-    Concrete agents only define state construction, graph/fallback execution,
-    and response construction. The public ``answer`` method stays consistent.
+    Concrete agent chỉ cần định nghĩa cách tạo state ban đầu, cách compile graph,
+    cách chạy fallback khi thiếu LangGraph và cách build response. Public method
+    ``answer`` nhờ vậy luôn ổn định với mọi agent.
     """
 
     name: str = "base-agent"
     description: str = "Abstract base agent"
 
     def __init__(self) -> None:
+        # Nếu langgraph được cài, graph sẽ được compile một lần khi khởi tạo.
+        # Nếu không, self.graph=None và agent dùng đường chạy thủ công.
         self.graph: Any | None = self._compile_graph()
 
     async def answer(self, request: RequestT) -> ResponseT:
-        """Run the full request -> state -> graph -> response lifecycle."""
+        """Chạy trọn lifecycle từ request bên ngoài tới response API."""
 
         state = self.build_initial_state(request)
         state = await self.run_graph(state)
         return self.build_response(state, request)
 
     async def run_graph(self, state: StateT) -> StateT:
-        """Use LangGraph when available, otherwise use manual fallback."""
+        """Chạy LangGraph nếu có, nếu không chạy fallback tuần tự."""
 
         if self.graph is not None:
             return await self.graph.ainvoke(state)
@@ -42,16 +50,16 @@ class BaseAgent(ABC, Generic[RequestT, ResponseT, StateT]):
 
     @abstractmethod
     def build_initial_state(self, request: RequestT) -> StateT:
-        """Convert an external request into graph state."""
+        """Chuyển request API thành state nội bộ cho graph."""
 
     @abstractmethod
     def build_response(self, state: StateT, request: RequestT) -> ResponseT:
-        """Convert final graph state into an API response."""
+        """Chuyển state cuối cùng thành response API."""
 
     @abstractmethod
     async def run_without_graph(self, state: StateT) -> StateT:
-        """Fallback execution path when LangGraph is not installed."""
+        """Đường chạy dự phòng khi môi trường chưa cài LangGraph."""
 
     @abstractmethod
     def _compile_graph(self) -> Any | None:
-        """Create and compile the LangGraph graph, or return None."""
+        """Compile LangGraph hoặc trả ``None`` để dùng fallback."""

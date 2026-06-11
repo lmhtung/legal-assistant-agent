@@ -1,4 +1,4 @@
-"""API schemas for chat and competition batch endpoints."""
+"""Schema cho endpoint chat và batch theo format bài thi."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,7 +9,7 @@ from src.schemas.legal import LegalAnswerRequest, LegalAnswerResponse
 
 
 class ChatRequest(BaseModel):
-    """Chat-style request mapped internally to LegalAnswerRequest."""
+    """Request kiểu chat, được map nội bộ sang ``LegalAnswerRequest``."""
 
     message: str
     session_id: str | None = None
@@ -18,7 +18,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """Chat response with tool-call debug information."""
+    """Response kiểu chat, giữ lại debug tool-call để dễ quan sát agent."""
 
     session_id: str | None = None
     message: str
@@ -27,17 +27,17 @@ class ChatResponse(BaseModel):
 
 
 class CompetitionBatchRequest(BaseModel):
-    """Batch request using the same item schema as single-answer API."""
+    """Batch request; mỗi item dùng đúng schema hỏi đáp đơn lẻ."""
 
     items: list[LegalAnswerRequest]
 
 
 class CompetitionBatchResponse(BaseModel):
-    """Batch response with helper for results.json export."""
+    """Batch response có helper xuất ra ``results.json``."""
 
     results: list[LegalAnswerResponse]
 
     def to_results_json(self) -> list[dict[str, Any]]:
-        """Return all answers in competition submission format."""
+        """Chỉ lấy các field mà bài thi thường yêu cầu khi submit."""
 
         return [item.to_competition_record() for item in self.results]

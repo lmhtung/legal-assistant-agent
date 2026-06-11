@@ -1,4 +1,4 @@
-"""TypedDict state shared by LangGraph nodes."""
+"""TypedDict mô tả state được truyền giữa các node LangGraph."""
 from __future__ import annotations
 
 from typing import Any, TypedDict
@@ -8,7 +8,12 @@ from src.services.agents.base.context import AgentContext
 
 
 class AgentState(TypedDict, total=False):
-    """Mutable state object passed from node to node."""
+    """State mutable đi từ node này sang node khác.
+
+    ``total=False`` cho phép mỗi node chỉ thêm field mình tạo ra. Ví dụ node
+    rewrite thêm ``retrieval_question``, node retrieve thêm ``selected_articles``
+    và node format thêm ``relevant_docs``/``relevant_articles``.
+    """
 
     question_id: int | None
     question: str

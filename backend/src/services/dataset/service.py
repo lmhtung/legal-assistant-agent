@@ -1,4 +1,8 @@
-"""Dataset import orchestration."""
+"""Orchestrator cho job import dataset offline.
+
+DatasetService nối các bước data lại với nhau: load record, lưu PostgreSQL, tạo
+store retrieval theo config và index các điều luật. Service này không expose API.
+"""
 from __future__ import annotations
 
 from src.config import get_settings
@@ -8,7 +12,7 @@ from src.services.vector_store import VectorStoreFactory, VectorStoreRegistry, v
 
 
 class DatasetService:
-    """Load structured records, persist them, and index them for retrieval."""
+    """Load structured records, persist DB và build retrieval index."""
 
     def __init__(
         self,
@@ -21,7 +25,7 @@ class DatasetService:
         self.store_factory = VectorStoreFactory(self.settings.legal_assistant.vector_store)
 
     async def import_dataset(self, request: DatasetImportRequest) -> DatasetImportResponse:
-        """Import records from request body and/or a local JSON/JSONL file."""
+        """Import record từ request/file, rồi ghi DB và/hoặc index vector store."""
 
         records = self._records_from_request(request)
         if request.save_to_postgres and self.settings.postgres.enabled:
@@ -36,7 +40,7 @@ class DatasetService:
         )
 
     def _records_from_request(self, request: DatasetImportRequest) -> list[LegalKnowledgeRecord]:
-        """Combine inline records with records loaded from ``input_path``."""
+        """Gộp record inline và record đọc từ ``input_path``."""
 
         records = list(request.records)
         if request.input_path is not None:
@@ -44,7 +48,7 @@ class DatasetService:
         return records
 
     def _index_records(self, database: str, records: list[LegalKnowledgeRecord]) -> None:
-        """Create the database store on demand and add converted records."""
+        """Tạo store theo database nếu chưa có rồi add articles vào index."""
 
         if not self.registry.has(database):
             self.registry.register(database, self.store_factory.create(database))

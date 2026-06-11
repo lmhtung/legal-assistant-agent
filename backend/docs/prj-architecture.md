@@ -1,78 +1,53 @@
-## Project Architecture
+# Project Architecture
 
-Backend hiện chỉ giữ một luồng tri thức chính:
+Hệ thống có 2 luồng tách biệt: data build offline và agent runtime. Chỉ agent runtime là FastAPI service.
 
-```text
-structured legal dataset -> PostgreSQL -> vector index -> hybrid retrieval -> legal assistant agent -> competition output
-```
+## Offline Data Builder
 
-Không còn OCR, raw PDF parser, markdown folder loader, hay corpus chunking trong API chính.
+Entry point thao tác dữ liệu: `scripts/import_dataset.py`.
 
-## Data Model
-
-Dataset đầu vào là record đã xử lý sẵn:
-
-```json
-{
-  "id": "44_2013_ND_CP",
-  "law_id": "44/2013/NĐ-CP",
-  "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
-  "doc_type": "Nghị định",
-  "chapter": "Chương I NHỮNG QUY ĐỊNH CHUNG",
-  "article": "Điều 1",
-  "article_title": "Phạm vi điều chỉnh",
-  "content": "...",
-  "author": "Chính phủ"
-}
-```
-
-Text dùng để embedding được build cố định:
+Không chạy port riêng, không có API view/search data, và không nằm trong `src` runtime. Đây là script nội bộ dùng khi cần import hoặc rebuild tri thức.
 
 ```text
-doc_type + " " + law_id + " " + law_name
-article + " " + article_title
-content
+structured JSON/JSONL dataset -> PostgreSQL -> Chroma/vector index
 ```
 
-## Active Modules
+Vai trò:
+
+- Validate record bằng schema `LegalKnowledgeRecord`.
+- Ghi record vào bảng `legal_knowledge_records`.
+- Embed text chuẩn hóa `doc_type + law_id + law_name + article + article_title + content`.
+- Index theo từng `database` logic để agent search đúng nhóm pháp luật.
+
+Port Docker PostgreSQL, ví dụ `25432`, chỉ nằm trong `postgres.database_url`. Nó không tạo thêm service HTTP nào.
+
+## Agent Service
+
+Entry point: `src.main:app`.
+
+Chạy ở port API, ví dụ `8000`.
 
 ```text
-src/
-  config.py                         # app, llm, embeddings, postgres, retrieval/vector config
-  schemas/
-    knowledge.py                    # structured dataset records + import request/response
-    legal.py                        # retrieval/query/answer schemas
-    api/chat.py                     # chat/batch API schemas
-  services/
-    dataset/
-      repository.py                 # PostgreSQL upsert + schema creation
-      service.py                    # import records, save PostgreSQL, index vector store
-    vector_store/
-      in_memory.py                  # lexical/BM25-like retrieval
-      chroma.py                     # vector retrieval via embedding endpoint
-      hybrid.py                     # RRF merge of lexical + vector results
-      factory.py                    # create bm25/chroma/hybrid store from config
-    agents/
-      base/                         # BaseAgent, AgentContext, AgentState
-      legal_assistant/              # rewrite/HyDE retrieval, grounded answer, submission format
-  routers/
-    dataset.py                      # POST /api/v1/dataset/import
-    legal.py                        # answer/chat/batch endpoints
-    health.py                       # GET /health
+question -> rewrite_query/hypothetical_answer -> vector search -> grounded answer -> competition output
 ```
+
+Agent không tự xử lý raw data và không expose endpoint dataset. Khi request chỉ định `databases`, agent mở store tương ứng từ cấu hình và search trên index đã build trước đó.
 
 ## Retrieval Modes
 
-Configured at `legal_assistant.retrieval.query_mode`:
+`legal_assistant.retrieval.query_mode` hỗ trợ:
 
-- `rewrite_query`: LLM rewrites the user question, then the rewritten query is embedded/searched.
-- `hypothetical_answer`: LLM creates a short hypothetical answer, then that text is embedded/searched.
+- `rewrite_query`: rewrite câu hỏi thành truy vấn pháp lý, embedding truy vấn rồi search.
+- `hypothetical_answer`: sinh câu trả lời ngắn dự kiến, embedding đoạn đó rồi search.
 
-Both modes still return grounded answers from retrieved legal records only.
+`legal_assistant.query_rewrite.enabled=false` sẽ bỏ qua bước rewrite/HyDE và search trực tiếp bằng câu hỏi gốc.
 
-## API
+## Extra References
 
-- `POST /api/v1/dataset/import`: import structured records, optionally save to PostgreSQL and index vectors.
-- `POST /api/v1/legal/answer`: answer one question, returns competition-compatible fields.
-- `POST /api/v1/legal/batch`: answer many questions.
-- `POST /api/v1/legal/chat`: chat-style wrapper.
+Mỗi record có `extra`, là danh sách các điều luật liên quan theo format:
+
+```text
+doc_type|law_id|law_name|article
+```
+
+Agent dùng `extra` sau retrieval để mở rộng `relevant_articles` và `relevant_docs` một cách deterministic. `extra` không được đưa vào embedding vì nó là quan hệ nguồn, không phải nội dung điều luật chính.
