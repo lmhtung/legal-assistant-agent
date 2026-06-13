@@ -4,19 +4,17 @@ app:
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8001/v1
+  base_url: http://localhost:8009/v1
   default_model: qwen3-8b-fp8
   temperature: 0.0
 
 embeddings:
   api_key: sk-1234
-  base_url: http://localhost:8002/v1
+  base_url: http://localhost:8013/v1
   model: bge-m3
 
 short_memory:
   enabled: true
-  max_turns: 6
-  max_chars: 4000
 
 mcp_retrieval:
   enabled: false
@@ -31,7 +29,7 @@ mcp_retrieval:
 
 legal_assistant:
   retrieval:
-    query_mode: rewrite_query # rewrite_query | hypothetical_answer
+    query_mode: rewrite # none | rewrite | hyde
   query_rewrite:
     enabled: true
     use_llm: true

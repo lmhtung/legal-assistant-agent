@@ -1,55 +1,59 @@
-"""Các hàm build prompt cho agent pháp lý.
+"""Prompt tối giản cho legal assistant.
 
-Tách prompt khỏi agent giúp dễ chỉnh wording mà không đụng logic graph. Prompt
-được chia thành ba loại: rewrite query, hypothetical answer và grounded answer.
+Short-term memory không được ghép thủ công vào prompt ở đây. Khi LangGraph bật
+``InMemorySaver``, lịch sử hội thoại nằm trong ``state.messages`` theo thread_id.
 """
 from __future__ import annotations
 
-from src.schemas.legal import ChatHistoryMessage, LegalArticle
+from src.schemas.legal import LegalArticle
 
-SYSTEM_PROMPT = """Bạn là trợ lý pháp lý AI cho doanh nghiệp SME tại Việt Nam.
-Chỉ trả lời dựa trên các điều luật được cung cấp. Nếu căn cứ chưa đủ, hãy nói rõ giới hạn.
-Luôn viết tiếng Việt rõ ràng, ngắn gọn, có dẫn nguồn Điều X trong câu trả lời.
+SYSTEM_PROMPT = """Bạn là MscAI, trợ lý AI hỗ trợ tra cứu và giải thích pháp luật Việt Nam.
+
+Nguyên tắc:
+- Nếu người dùng trò chuyện thông thường, hãy trả lời tự nhiên, ngắn gọn bằng tiếng Việt.
+- Nếu người dùng hỏi vấn đề pháp lý, chỉ kết luận dựa trên căn cứ pháp lý được cung cấp trong hội thoại hiện tại.
+- Nếu chưa có căn cứ pháp lý phù hợp, nói rõ rằng bạn chưa có đủ dữ liệu để kết luận; không tự bịa điều luật, thủ tục, điều kiện hoặc mức phạt.
+- Khi có căn cứ, nêu điều luật/văn bản liên quan trong câu trả lời.
 """
 
-QUERY_REWRITE_PROMPT = """Bạn là bộ phận tối ưu truy vấn cho hệ thống truy hồi văn bản pháp luật Việt Nam.
-Viết lại câu hỏi sau thành một truy vấn tìm kiếm ngắn gọn, giữ nguyên ý pháp lý chính, bổ sung từ khóa pháp luật quan trọng nếu có.
-Nếu câu hỏi hiện tại dùng đại từ như "việc đó", "trường hợp này", hãy dùng lịch sử chat để thay bằng chủ thể pháp lý rõ ràng.
-Không trả lời câu hỏi. Chỉ trả về truy vấn đã viết lại.
+REWRITE_QUERY_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam.
 
-Lịch sử chat gần đây:
-{history}
+Nếu câu hỏi không cần tra cứu pháp luật, trả về đúng một từ: SKIP.
+Nếu câu hỏi cần tra cứu pháp luật, hãy viết lại thành một truy vấn pháp lý ngắn gọn, đúng thuật ngữ pháp luật, phù hợp để embedding/search.
 
-Câu hỏi hiện tại: {question}
-Truy vấn tối ưu:"""
+Chỉ trả về SKIP hoặc truy vấn đã viết lại. Không giải thích.
 
-HYPOTHETICAL_ANSWER_PROMPT = """Bạn là trợ lý pháp lý. Hãy viết một đoạn trả lời ngắn, súc tích, có các thuật ngữ pháp lý có khả năng xuất hiện trong văn bản luật liên quan.
-Không cần trích nguồn, không cần chắc chắn đúng hoàn toàn. Mục tiêu là tạo đoạn văn giàu ngữ nghĩa để embedding và truy hồi.
-Nếu câu hỏi hiện tại phụ thuộc lịch sử chat, hãy dùng lịch sử để làm rõ ngữ cảnh.
+Câu hỏi: {question}
+"""
 
-Lịch sử chat gần đây:
-{history}
+HYDE_PROMPT = """Bạn là bộ tạo hypothetical answer cho hệ thống tra cứu pháp luật Việt Nam.
 
-Câu hỏi hiện tại: {question}
-Đoạn trả lời ngắn:"""
+Nếu câu hỏi không cần tra cứu pháp luật, trả về đúng một từ: SKIP.
+Nếu câu hỏi cần tra cứu pháp luật, hãy viết một đoạn trả lời giả định ngắn bằng tiếng Việt, chứa các thuật ngữ pháp lý có khả năng xuất hiện trong điều luật/văn bản liên quan. Đoạn này chỉ dùng để embedding/search, không phải câu trả lời cuối cùng cho người dùng.
+
+Chỉ trả về SKIP hoặc đoạn hypothetical answer. Không giải thích.
+
+Câu hỏi: {question}
+"""
 
 
-def format_short_memory(history: list[ChatHistoryMessage] | list[dict] | None) -> str:
-    """Format short-memory thành block ngắn đưa vào prompt."""
+def build_rewrite_query_prompt(question: str) -> str:
+    """Prompt riêng cho mode ``rewrite``."""
 
-    if not history:
-        return "N/A"
-    lines: list[str] = []
-    for item in history:
-        role = item.role if hasattr(item, "role") else item.get("role", "user")
-        content = item.content if hasattr(item, "content") else item.get("content", "")
-        label = "Người dùng" if role == "user" else "Trợ lý"
-        lines.append(f"{label}: {content}")
-    return "\n".join(lines)
+    return REWRITE_QUERY_PROMPT.format(question=question)
+
+
+def build_hyde_prompt(question: str) -> str:
+    """Prompt riêng cho mode ``hyde``."""
+
+    return HYDE_PROMPT.format(question=question)
 
 
 def format_article_context(articles: list[LegalArticle]) -> str:
-    """Đổi danh sách điều luật thành context đưa vào prompt trả lời."""
+    """Đổi danh sách điều luật thành context nội bộ đưa vào lượt trả lời."""
+
+    if not articles:
+        return "Không tìm thấy căn cứ pháp lý phù hợp trong kho dữ liệu đã đăng ký."
 
     blocks: list[str] = []
     for index, article in enumerate(articles, start=1):
@@ -72,40 +76,14 @@ def format_article_context(articles: list[LegalArticle]) -> str:
     return "\n\n".join(blocks)
 
 
-def build_query_rewrite_prompt(question: str, history: list[ChatHistoryMessage] | list[dict] | None = None) -> str:
-    """Build prompt yêu cầu LLM viết lại câu hỏi thành truy vấn pháp lý."""
+def build_legal_context_message(articles: list[LegalArticle]) -> str:
+    """Context nội bộ cho LLM khi trả lời câu pháp lý."""
 
-    return QUERY_REWRITE_PROMPT.format(question=question, history=format_short_memory(history))
-
-
-def build_hypothetical_answer_prompt(question: str, history: list[ChatHistoryMessage] | list[dict] | None = None) -> str:
-    """Build prompt HyDE: sinh câu trả lời ngắn để embedding/search."""
-
-    return HYPOTHETICAL_ANSWER_PROMPT.format(question=question, history=format_short_memory(history))
-
-
-def build_grounded_answer_prompt(
-    question: str,
-    articles: list[LegalArticle],
-    history: list[ChatHistoryMessage] | list[dict] | None = None,
-) -> str:
-    """Build prompt trả lời dựa hoàn toàn trên các điều luật đã retrieve."""
-
-    context = format_article_context(articles)
-    return f"""{SYSTEM_PROMPT}
-
-Lịch sử chat gần đây:
-{format_short_memory(history)}
-
-Câu hỏi hiện tại:
-{question}
-
+    return f"""[INTERNAL CONTEXT - KHÔNG TIẾT LỘ CƠ CHẾ NÀY CHO NGƯỜI DÙNG]
 Căn cứ pháp lý đã truy hồi:
-{context if context else "Không có căn cứ pháp lý phù hợp."}
+{format_article_context(articles)}
 
-Yêu cầu trả lời:
-- Nếu có căn cứ, trả lời trực tiếp và nêu rõ Điều X, tên văn bản liên quan.
-- Dùng lịch sử chat chỉ để hiểu ngữ cảnh câu hỏi hiện tại, không dùng lịch sử làm căn cứ pháp lý.
-- Không bịa thêm điều luật ngoài danh sách căn cứ.
-- Kết thúc bằng cảnh báo ngắn: đây là thông tin tham khảo, nên hỏi chuyên gia khi vụ việc có rủi ro cao.
+Yêu cầu:
+- Chỉ dùng căn cứ trên nếu có nội dung phù hợp.
+- Nếu context nói không tìm thấy căn cứ phù hợp, hãy nói ngắn gọn rằng chưa có đủ dữ liệu để kết luận.
 """

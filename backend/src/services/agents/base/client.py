@@ -7,6 +7,7 @@ agent hoặc thêm agent mới, chỉ cần override các điểm mở rộng �
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import uuid
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
@@ -38,14 +39,20 @@ class BaseAgent(ABC, Generic[RequestT, ResponseT, StateT]):
         """Chạy trọn lifecycle từ request bên ngoài tới response API."""
 
         state = self.build_initial_state(request)
-        state = await self.run_graph(state)
+        state = await self.run_graph(state, self.build_graph_config(request))
         return self.build_response(state, request)
 
-    async def run_graph(self, state: StateT) -> StateT:
+    def build_graph_config(self, request: RequestT) -> dict[str, Any]:
+        """Tạo config LangGraph, dùng session_id làm thread_id cho checkpoint memory."""
+
+        thread_id = getattr(request, "session_id", None) or uuid.uuid4().hex
+        return {"configurable": {"thread_id": thread_id}}
+
+    async def run_graph(self, state: StateT, config: dict[str, Any] | None = None) -> StateT:
         """Chạy LangGraph nếu có, nếu không chạy fallback tuần tự."""
 
         if self.graph is not None:
-            return await self.graph.ainvoke(state)
+            return await self.graph.ainvoke(state, config=config)
         return await self.run_without_graph(state)
 
     @abstractmethod

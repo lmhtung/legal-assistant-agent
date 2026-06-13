@@ -30,7 +30,7 @@ search_relevant(extra_refs, databases, top_k)
 Entry point: `src.main:app`.
 
 ```text
-question -> rewrite_query/hypothetical_answer -> MCP search -> grounded answer -> competition output
+question -> prepare_retrieval_query(none/rewrite/hyde) -> optional MCP search -> answer -> competition output
 ```
 
 Nếu `mcp_retrieval.enabled=false`, agent dùng tool local cũ để dev/fallback. Nếu MCP bật nhưng lỗi và `fallback_to_local=true`, agent cũng fallback local.
@@ -39,7 +39,8 @@ Nếu `mcp_retrieval.enabled=false`, agent dùng tool local cũ để dev/fallba
 
 `legal_assistant.retrieval.query_mode` hỗ trợ:
 
-- `rewrite_query`: rewrite câu hỏi thành truy vấn pháp lý, gửi truy vấn sang MCP search.
-- `hypothetical_answer`: sinh câu trả lời ngắn dự kiến, gửi đoạn đó sang MCP search.
+- `none`: không rewrite, embedding/search bằng câu hỏi gốc.
+- `rewrite`: rewrite câu hỏi thành truy vấn pháp lý rồi embedding/search.
+- `hyde`: sinh hypothetical answer ngắn rồi embedding/search bằng đoạn đó.
 
-`legal_assistant.query_rewrite.enabled=false` sẽ bỏ qua bước rewrite/HyDE và search trực tiếp bằng câu hỏi gốc.
+`legal_assistant.query_rewrite.enabled=false` sẽ tắt bước LLM chuẩn bị query và search trực tiếp bằng câu hỏi gốc.

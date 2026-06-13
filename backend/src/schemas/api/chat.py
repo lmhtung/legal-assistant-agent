@@ -1,7 +1,7 @@
 """Schema cho endpoint chat và batch theo format bài thi."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +24,45 @@ class ChatResponse(BaseModel):
     message: str
     answer: LegalAnswerResponse
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatStreamMessagePayload(BaseModel):
+    """Payload text ngắn cho event trạng thái, done hoặc error."""
+
+    message: str
+
+
+class ChatStreamStatusEvent(BaseModel):
+    """Event báo UI biết agent đang ở bước xử lý nào."""
+
+    event: Literal["status"] = "status"
+    data: ChatStreamMessagePayload
+
+
+class ChatStreamResultEvent(BaseModel):
+    """Event chứa response cuối cùng của chat."""
+
+    event: Literal["result"] = "result"
+    data: ChatResponse
+
+
+class ChatStreamDoneEvent(BaseModel):
+    """Event báo stream đã hoàn tất."""
+
+    event: Literal["done"] = "done"
+    data: ChatStreamMessagePayload
+
+
+class ChatStreamErrorEvent(BaseModel):
+    """Event báo lỗi runtime để UI hiển thị trong bubble assistant."""
+
+    event: Literal["error"] = "error"
+    data: ChatStreamMessagePayload
+
+
+ChatStreamEvent: TypeAlias = (
+    ChatStreamStatusEvent | ChatStreamResultEvent | ChatStreamDoneEvent | ChatStreamErrorEvent
+)
 
 
 class CompetitionBatchRequest(BaseModel):

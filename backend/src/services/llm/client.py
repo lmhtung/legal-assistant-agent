@@ -26,7 +26,13 @@ class LLMClient:
         )
 
     async def ainvoke(self, prompt: str) -> str:
-        """Gọi chat model bất đồng bộ và trả về plain text."""
+        """Gọi chat model bất đồng bộ bằng plain prompt và trả về plain text."""
 
         response = await self.chat.ainvoke(prompt)
+        return response.content
+
+    async def ainvoke_messages(self, messages) -> str:
+        """Gọi chat model bằng danh sách LangChain messages."""
+
+        response = await self.chat.ainvoke(messages)
         return response.content

@@ -70,15 +70,12 @@ class EmbeddingsSettings(ConfigModel):
 
 
 class ShortMemorySettings(ConfigModel):
-    """Cấu hình short-memory cho endpoint chat theo session_id.
+    """Bật/tắt LangGraph InMemorySaver cho chat theo session_id.
 
-    Memory này chỉ nằm trong RAM của backend process, dùng để giữ vài lượt gần
-    nhất trong cùng một đoạn chat. Nó không thay thế database/checkpoint dài hạn.
+    Memory chỉ nằm trong RAM của backend process và mất khi service restart.
     """
 
     enabled: bool = True
-    max_turns: int = 6
-    max_chars: int = 4000
 
 
 class MCPServerSettings(ConfigModel):
@@ -104,9 +101,9 @@ class MCPRetrievalSettings(ConfigModel):
 
 
 class RetrievalSettings(ConfigModel):
-    """Chọn cách tạo text đem đi embedding/search trước retrieval."""
+    """Chọn text đem đi embedding/search: none, rewrite hoặc hyde."""
 
-    query_mode: Literal["rewrite_query", "hypothetical_answer"] = "rewrite_query"
+    query_mode: Literal["none", "rewrite", "hyde"] = "rewrite"
 
 
 class QueryRewriteSettings(ConfigModel):

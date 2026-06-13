@@ -1,13 +1,25 @@
 """Các HTTP endpoint phục vụ hỏi đáp pháp lý."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import json
 
-from src.dependencies import get_legal_assistant_agent, get_short_memory_store
-from src.schemas.api.chat import ChatRequest, ChatResponse, CompetitionBatchRequest, CompetitionBatchResponse
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+
+from src.dependencies import get_legal_assistant_agent
+from src.schemas.api.chat import (
+    ChatRequest,
+    ChatResponse,
+    ChatStreamDoneEvent,
+    ChatStreamErrorEvent,
+    ChatStreamMessagePayload,
+    ChatStreamResultEvent,
+    ChatStreamStatusEvent,
+    CompetitionBatchRequest,
+    CompetitionBatchResponse,
+)
 from src.schemas.legal import LegalAnswerRequest, LegalAnswerResponse
 from src.services.agents.legal_assistant import LegalAssistantAgent
-from src.services.memory import ShortMemoryStore
 
 router = APIRouter(prefix="/api/v1/legal", tags=["legal-assistant"])
 
@@ -26,31 +38,67 @@ async def answer_question(
 async def chat(
     request: ChatRequest,
     agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
-    memory: ShortMemoryStore | None = Depends(get_short_memory_store),
 ) -> ChatResponse:
-    """Chat wrapper có short-memory theo ``session_id``.
+    """Chat wrapper dùng ``session_id`` làm LangGraph thread_id."""
 
-    History gần nhất chỉ dùng để hiểu ngữ cảnh câu hỏi hiện tại, còn căn cứ pháp
-    lý vẫn phải đến từ retrieval/MCP.
-    """
-
-    history = memory.get(request.session_id) if memory is not None else []
     answer = await agent.answer(
         LegalAnswerRequest(
+            session_id=request.session_id,
             question=request.message,
             databases=request.databases,
             top_k=request.top_k,
             include_debug=True,
-            conversation_history=history,
         )
     )
-    if memory is not None:
-        memory.append_turn(request.session_id, request.message, answer.answer)
     return ChatResponse(
         session_id=request.session_id,
         message=request.message,
         answer=answer,
         tool_calls=answer.debug.get("tool_calls", []),
+    )
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
+) -> StreamingResponse:
+    """Stream trạng thái xử lý và trả kết quả chat cuối cùng bằng SSE."""
+
+    async def events():
+        def pack(stream_event) -> str:
+            event = stream_event.event
+            data = stream_event.data.model_dump(mode="json")
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        try:
+            yield pack(ChatStreamStatusEvent(data=ChatStreamMessagePayload(message="Chuẩn bị hội thoại")))
+            yield pack(ChatStreamStatusEvent(data=ChatStreamMessagePayload(message="Gọi legal agent")))
+            answer = await agent.answer(
+                LegalAnswerRequest(
+                    session_id=request.session_id,
+                    question=request.message,
+                    databases=request.databases,
+                    top_k=request.top_k,
+                    include_debug=True,
+                )
+            )
+            yield pack(ChatStreamStatusEvent(data=ChatStreamMessagePayload(message="Đã nhận kết quả")))
+            response = ChatResponse(
+                session_id=request.session_id,
+                message=request.message,
+                answer=answer,
+                tool_calls=answer.debug.get("tool_calls", []),
+            )
+            yield pack(ChatStreamResultEvent(data=response))
+            yield pack(ChatStreamDoneEvent(data=ChatStreamMessagePayload(message="Hoàn tất")))
+        except Exception as exc:  # pragma: no cover - trả lỗi runtime cho UI
+            yield pack(ChatStreamErrorEvent(data=ChatStreamMessagePayload(message=str(exc))))
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

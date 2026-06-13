@@ -30,16 +30,14 @@ GET  /health
 
 ## Short Memory
 
-Endpoint `/api/v1/legal/chat` có short-memory theo `session_id`. Memory này chỉ lưu trong RAM và giữ vài lượt gần nhất để hiểu các câu hỏi nối tiếp trong cùng một đoạn chat.
+Endpoint `/api/v1/legal/chat` dùng LangGraph `InMemorySaver` theo `session_id`. Memory này chỉ lưu trong RAM của backend process và mất khi service restart.
 
 ```yaml
 short_memory:
   enabled: true
-  max_turns: 6
-  max_chars: 4000
 ```
 
-Cách dùng: các request chat cùng đoạn hội thoại cần gửi cùng `session_id`. Endpoint `/answer` và `/batch` vẫn stateless.
+Cách dùng: các request chat cùng đoạn hội thoại cần gửi cùng `session_id`. Endpoint `/answer` và `/batch` vẫn stateless nếu không gửi `session_id`.
 
 ## MCP Retrieval
 
@@ -65,16 +63,21 @@ search_legal_articles -> search vector DB qua MCP
 search_relevant       -> đọc extra rồi query PostgreSQL exact match, không embedding
 ```
 
-## Query Mode
+## Retrieval Query Mode
 
 ```yaml
 legal_assistant:
   retrieval:
-    query_mode: rewrite_query # rewrite_query | hypothetical_answer
+    query_mode: rewrite # none | rewrite | hyde
+  query_rewrite:
+    enabled: true
+    use_llm: true
 ```
 
-- `rewrite_query`: LLM viết lại câu hỏi thành truy vấn pháp lý ngắn, rồi gửi sang MCP để search.
-- `hypothetical_answer`: LLM sinh câu trả lời ngắn dự kiến, rồi gửi đoạn đó sang MCP để search.
+- `none`: không rewrite; nếu là câu hỏi pháp lý thì embedding/search bằng câu hỏi gốc.
+- `rewrite`: rewrite câu hỏi sang ngôn ngữ pháp luật rồi embedding/search.
+- `hyde`: sinh hypothetical answer ngắn rồi embedding/search bằng đoạn đó.
+- `query_rewrite.enabled=false`: tắt bước LLM chuẩn bị query, luôn search bằng câu hỏi gốc; hợp khi tập test chỉ gồm câu hỏi pháp lý.
 
 ## Hợp Đồng Dữ Liệu
 

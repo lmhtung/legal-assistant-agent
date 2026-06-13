@@ -121,8 +121,8 @@ sequenceDiagram
 
     U->>B: POST /api/v1/legal/chat hoặc /answer
     B->>B: lấy short-memory nếu có session_id
-    B->>L: rewrite_query hoặc hypothetical_answer
-    L-->>B: retrieval_text
+    B->>L: prepare_retrieval_query theo mode none/rewrite/hyde
+    L-->>B: SKIP, SEARCH, rewrite query hoặc hypothetical answer
     B->>M: search_legal_articles(retrieval_text, databases, top_k)
     M->>V: vector search
     V-->>M: candidates + metadata + extra
@@ -265,11 +265,9 @@ Short-memory cho chat:
 ```yaml
 short_memory:
   enabled: true
-  max_turns: 6
-  max_chars: 4000
 ```
 
-Memory này chỉ áp dụng cho `/api/v1/legal/chat`. Client cần gửi cùng `session_id` để backend nối các lượt chat lại với nhau. `/answer` và `/batch` vẫn stateless.
+Memory dùng LangGraph `InMemorySaver`, chỉ nằm trong RAM của backend process. Client cần gửi cùng `session_id` để backend nối các lượt chat lại với nhau. `/answer` và `/batch` vẫn stateless nếu không gửi `session_id`.
 
 MCP retrieval:
 
@@ -300,11 +298,11 @@ Query mode:
 ```yaml
 legal_assistant:
   retrieval:
-    query_mode: rewrite_query # rewrite_query | hypothetical_answer
+    query_mode: rewrite # none | rewrite | hyde
 ```
 
-- `rewrite_query`: LLM viết lại câu hỏi thành truy vấn pháp lý.
-- `hypothetical_answer`: LLM sinh câu trả lời ngắn dự kiến rồi dùng nó để search.
+- `rewrite`: LLM viết lại câu hỏi thành truy vấn pháp lý.
+- `hyde`: LLM sinh hypothetical answer ngắn rồi dùng nó để search.
 
 ### 7.2 MCP
 
@@ -387,7 +385,7 @@ flowchart TD
     API[routers/legal.py] --> Dep[dependencies.py]
     Dep --> Agent[LegalAssistantAgent]
     Dep --> MCPClient[MCPRetrievalClient]
-    Agent --> Rewrite[_rewrite_query_node]
+    Agent --> Rewrite[_prepare_retrieval_query_node]
     Rewrite --> Retrieve[_retrieve_node]
     Retrieve --> MCPClient
     MCPClient --> MCP[MCP Server]
@@ -399,17 +397,17 @@ flowchart TD
 
 ## 11. Short-Memory Trong Chat
 
-Short-memory được đặt trong backend runtime, không nằm ở MCP và không ghi database.
+Short-memory dùng LangGraph `InMemorySaver`, không nằm ở MCP và không ghi database.
 
 Luồng hoạt động:
 
 ```text
 /chat request có session_id
--> ShortMemoryStore lấy vài lượt gần nhất
--> LegalAnswerRequest.conversation_history
--> rewrite/HyDE prompt dùng history để làm rõ câu hỏi
--> grounded answer prompt dùng history để hiểu ngữ cảnh
--> lưu lượt user/assistant mới vào memory
+-> BaseAgent dùng session_id làm thread_id
+-> LangGraph/InMemorySaver nạp messages của thread đó
+-> prepare_retrieval_query chọn none/rewrite/hyde
+-> generate_answer gọi LLM bằng messages hiện tại
+-> format_submission append AIMessage để InMemorySaver lưu cho lượt sau
 ```
 
 Giới hạn:

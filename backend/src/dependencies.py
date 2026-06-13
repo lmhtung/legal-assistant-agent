@@ -12,7 +12,6 @@ from src.config import get_settings
 from src.services.agents.legal_assistant import LegalAssistantAgent
 from src.services.llm.client import LLMClient
 from src.services.mcp import MCPRetrievalClient
-from src.services.memory import ShortMemoryStore
 
 
 @lru_cache(maxsize=1)
@@ -32,19 +31,6 @@ def get_mcp_retrieval_client() -> MCPRetrievalClient | None:
     return MCPRetrievalClient(
         servers=settings.mcp_retrieval.servers,
         primary_server=settings.mcp_retrieval.primary_server,
-    )
-
-
-@lru_cache(maxsize=1)
-def get_short_memory_store() -> ShortMemoryStore | None:
-    """Tạo short-memory store nếu config bật memory cho chat."""
-
-    settings = get_settings()
-    if not settings.short_memory.enabled:
-        return None
-    return ShortMemoryStore(
-        max_turns=settings.short_memory.max_turns,
-        max_chars=settings.short_memory.max_chars,
     )
 
 
