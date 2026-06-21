@@ -4,7 +4,8 @@ export type LegalArticle = {
   law_id: string;
   law_name: string;
   doc_type: string;
-  database: string;
+  database?: string;
+  category?: string;
   chapter?: string | null;
   article: string;
   article_title?: string | null;
@@ -16,6 +17,7 @@ export type LegalArticle = {
 
 export type LegalAnswerResponse = {
   id?: number | null;
+  session_id?: string | null;
   question: string;
   answer: string;
   relevant_docs: string[];
@@ -37,10 +39,25 @@ export type ChatStreamEvent =
   | { event: "done"; data: { message: string } }
   | { event: "error"; data: { message: string } };
 
+export type AgentTraceStep = {
+  title: string;
+  detail: string;
+  tone?: "info" | "success" | "warning" | "error";
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   stream: string[];
+  trace: AgentTraceStep[];
   sources: string[];
+};
+
+export type Conversation = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
 };
