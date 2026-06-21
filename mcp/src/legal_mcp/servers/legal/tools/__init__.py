@@ -1,1 +1,0 @@
-"""Legal MCP tool functions."""

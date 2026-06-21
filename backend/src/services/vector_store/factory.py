@@ -20,7 +20,7 @@ class VectorStoreFactory:
         """Tạo store theo ``legal_assistant.vector_store.mode`` trong config.yaml."""
 
         if self.settings.mode == "bm25":
-            return InMemoryLegalStore(database=database)
+            return self._create_bm25_store(database)
         if self.settings.mode == "chroma":
             return ChromaLegalStore(
                 database=database,
@@ -29,7 +29,7 @@ class VectorStoreFactory:
                 embeddings=self._get_embeddings(),
             )
         return HybridLegalStore(
-            lexical_store=InMemoryLegalStore(database=database),
+            lexical_store=self._create_bm25_store(database),
             vector_store=ChromaLegalStore(
                 database=database,
                 persist_directory=str(self.settings.persist_directory),
@@ -37,6 +37,17 @@ class VectorStoreFactory:
                 embeddings=self._get_embeddings(),
             ),
             rrf_k=self.settings.rrf_k,
+        )
+
+    def _create_bm25_store(self, database: str) -> InMemoryLegalStore:
+        """Tạo BM25 store với tokenizer/tham số lấy từ config."""
+
+        return InMemoryLegalStore(
+            database=database,
+            tokenizer=self.settings.bm25_tokenizer,
+            k1=self.settings.bm25_k1,
+            b=self.settings.bm25_b,
+            epsilon=self.settings.bm25_epsilon,
         )
 
     def _get_embeddings(self) -> EmbeddingsClient:

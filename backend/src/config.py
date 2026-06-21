@@ -1,7 +1,7 @@
 """Cấu hình ứng dụng đọc từ ``backend/config.yaml`` và biến môi trường.
 
 File này là nơi gom toàn bộ cấu hình runtime: FastAPI, LLM, embedding,
-MCP retrieval, short-memory và fallback vector store local. Các class cấu hình dùng Pydantic để:
+short-memory và fallback vector store local. Các class cấu hình dùng Pydantic để:
 
 - validate kiểu dữ liệu ngay khi app khởi động;
 - có default rõ ràng khi thiếu config;
@@ -78,28 +78,6 @@ class ShortMemorySettings(ConfigModel):
     enabled: bool = True
 
 
-class MCPServerSettings(ConfigModel):
-    """Một MCP server mà backend có thể gọi tool."""
-
-    url: str
-    transport: Literal["http", "streamable_http"] = "http"
-
-
-class MCPRetrievalSettings(ConfigModel):
-    """Cấu hình gọi MCP server cho retrieval bên ngoài backend.
-
-    Backend chỉ cần biết MCP server nào đang chạy. Tên tool là contract cố định
-    giữa backend và legal MCP server, không để người dùng phải chỉnh trong YAML.
-    """
-
-    enabled: bool = False
-    primary_server: str = "legal_retrieval"
-    servers: dict[str, MCPServerSettings] = Field(default_factory=dict)
-    fallback_to_local: bool = True
-    fetch_related: bool = True
-    related_top_k: int = 16
-
-
 class RetrievalSettings(ConfigModel):
     """Chọn text đem đi embedding/search: none, rewrite hoặc hyde."""
 
@@ -114,6 +92,16 @@ class QueryRewriteSettings(ConfigModel):
     max_variants: int = 3
 
 
+class CategorySettings(ConfigModel):
+    """Cấu hình phân loại category trước retrieval."""
+
+    available: list[str] = Field(default_factory=list)
+    default: list[str] = Field(default_factory=lambda: ["default"])
+    top_k_when_le_2_categories: int = 2
+    top_k_when_many_categories: int = 1
+    hyde_top_k: int = 3
+
+
 class VectorStoreSettings(ConfigModel):
     """Cấu hình backend retrieval: lexical, Chroma vector hoặc hybrid."""
 
@@ -122,6 +110,10 @@ class VectorStoreSettings(ConfigModel):
     default_collection: str = "legal_articles"
     rrf_k: int = 60
     top_k: int = 8
+    bm25_tokenizer: Literal["auto", "underthesea", "regex"] = "auto"
+    bm25_k1: float = 2.0
+    bm25_b: float = 1.0
+    bm25_epsilon: float = 0.5
 
     @model_validator(mode="after")
     def resolve_persist_directory(self):
@@ -142,6 +134,7 @@ class LegalAssistantSettings(ConfigModel):
 
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
+    categories: CategorySettings = Field(default_factory=CategorySettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
 
 
@@ -152,7 +145,6 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
     short_memory: ShortMemorySettings = Field(default_factory=ShortMemorySettings)
-    mcp_retrieval: MCPRetrievalSettings = Field(default_factory=MCPRetrievalSettings)
     legal_assistant: LegalAssistantSettings = Field(
         default_factory=LegalAssistantSettings,
         validation_alias=AliasChoices("legal_assistant", "legal-assistant"),

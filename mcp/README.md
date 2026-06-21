@@ -1,44 +1,13 @@
-# Legal Retrieval MCP
+# Legal Data Logic
 
-MCP server này là boundary giữa backend agent và hệ thống dữ liệu/vector DB. Cấu trúc được giữ giống tinh thần project mẫu: có core runner/registry/factory và server plugin riêng.
+Tạm thời package `mcp/` chỉ giữ logic data/database cho legal assistant. Backend agent không gọi MCP tools trong giai đoạn này.
 
-## Cấu Trúc
-
-```text
-mcp/src/legal_mcp/core/              # hạ tầng chạy MCP server
-mcp/src/legal_mcp/servers/legal/     # plugin legal retrieval
-mcp/src/legal_mcp/vector.py          # đọc Chroma vector index
-mcp/src/legal_mcp/postgres.py        # đọc PostgreSQL cho search_relevant
-```
-
-## Tools
+Các phần còn giữ:
 
 ```text
-search_legal_articles(query, original_question, query_variants, databases, top_k)
+mcp/src/legal_mcp/postgres.py  # logic đọc PostgreSQL/search related bằng exact match
+mcp/src/legal_mcp/vector.py    # logic đọc Chroma/vector index nếu cần dùng lại
+mcp/src/legal_mcp/schemas.py   # schema dữ liệu nội bộ phía data layer
 ```
 
-Search vector DB đã build sẵn và trả candidates có metadata đủ để backend dựng `LegalArticle`.
-
-```text
-search_relevant(extra_refs, databases, top_k)
-```
-
-Parse `extra` theo format `doc_type|law_id|law_name|article`, rồi query PostgreSQL exact match. Tool này không dùng embedding.
-
-## Chạy MCP Server
-
-```bash
-cd mcp
-pip install -r requirements.txt
-PYTHONPATH=src python -m legal_mcp.main
-```
-
-## Thêm Tool Mới
-
-Thêm tool vào:
-
-```text
-mcp/src/legal_mcp/servers/legal/tools/
-```
-
-Sau đó import/đăng ký trong `servers/legal/server.py` hoặc `tools/retrieval.py`. Backend không cần biết chi tiết data layer, chỉ gọi MCP theo contract.
+Luồng chat hiện tại chạy retrieval trực tiếp trong backend/local vector store theo `category`, không qua MCP tool.

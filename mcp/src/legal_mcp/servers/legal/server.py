@@ -1,15 +1,14 @@
-"""Legal retrieval MCP server plugin."""
+"""MCP package giữ logic database/vector cho dữ liệu pháp luật."""
 from __future__ import annotations
 
 from legal_mcp.config import LegalServerSettings, ServerConfig
 from legal_mcp.core.server import BaseMCPServer
 from legal_mcp.postgres import PostgresLegalRepository
-from legal_mcp.servers.legal.tools.retrieval import register_retrieval_tools
 from legal_mcp.vector import ChromaRetriever
 
 
 class LegalRetrievalServer(BaseMCPServer):
-    """MCP server chứa các tool đọc/search dữ liệu pháp luật."""
+    """Server shell chỉ khởi tạo database/vector logic, chưa expose tools."""
 
     def __init__(self, name: str, config: ServerConfig) -> None:
         self.settings = LegalServerSettings.model_validate(config.settings)
@@ -34,6 +33,6 @@ class LegalRetrievalServer(BaseMCPServer):
         return self._postgres_repository
 
     def register_tools(self) -> None:
-        """Đăng ký toàn bộ legal tools."""
+        """Không đăng ký MCP tools trong giai đoạn hiện tại."""
 
-        register_retrieval_tools(self)
+        return None

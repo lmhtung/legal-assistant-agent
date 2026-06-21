@@ -4,8 +4,8 @@ app:
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8009/v1
-  default_model: qwen3-8b-fp8
+  base_url: http://localhost:8015/v1
+  default_model: gemma4-12b
   temperature: 0.0
 
 embeddings:
@@ -16,16 +16,6 @@ embeddings:
 short_memory:
   enabled: true
 
-mcp_retrieval:
-  enabled: false
-  primary_server: legal_retrieval
-  servers:
-    legal_retrieval:
-      url: http://localhost:8765/mcp
-      transport: http
-  fallback_to_local: true
-  fetch_related: true
-  related_top_k: 16
 
 legal_assistant:
   retrieval:
@@ -34,9 +24,19 @@ legal_assistant:
     enabled: true
     use_llm: true
     max_variants: 3
+  categories:
+    available: [] # ví dụ: [luat_dau_thau, luat_ho_tro_doanh_nghiep_vua_va_nho]
+    default: [default]
+    top_k_when_le_2_categories: 2
+    top_k_when_many_categories: 1
+    hyde_top_k: 3
   vector_store:
     mode: hybrid # bm25 | chroma | hybrid
     persist_directory: ./chroma_db
     default_collection: legal_articles
     rrf_k: 60
     top_k: 8
+    bm25_tokenizer: auto # auto | underthesea | regex
+    bm25_k1: 2.0
+    bm25_b: 1.0
+    bm25_epsilon: 0.5

@@ -1,4 +1,4 @@
-"""PostgreSQL lookup cho tool search_relevant, không dùng embedding."""
+"""PostgreSQL lookup exact-match cho data layer, không dùng embedding."""
 from __future__ import annotations
 
 import json
@@ -57,7 +57,7 @@ class PostgresLegalRepository:
         try:
             import asyncpg
         except ImportError as exc:  # pragma: no cover - phụ thuộc runtime MCP
-            raise RuntimeError("Cần cài asyncpg để dùng search_relevant") from exc
+            raise RuntimeError("Cần cài asyncpg để đọc PostgreSQL legal data") from exc
 
         conn = await asyncpg.connect(self.settings.database_url)
         try:

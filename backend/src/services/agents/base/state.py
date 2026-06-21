@@ -27,12 +27,16 @@ class AgentState(TypedDict, total=False):
     question_id: int | None
     session_id: str | None
     question: str
+    legal_flag: str
     rewritten_question: str
     hypothetical_answer: str
     retrieval_question: str
     retrieval_mode: str
     query_variants: list[str]
+    categories: list[str]
     skip_retrieval: bool
+    per_category: bool
+    retrieval_top_k: int
     context: AgentContext
     messages: Annotated[list[BaseMessage], add_messages]
     tool_calls: list[dict[str, Any]]

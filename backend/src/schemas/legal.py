@@ -8,22 +8,21 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import AliasChoices, BaseModel, Field, computed_field
 
 
 class LegalArticle(BaseModel):
     """Một đơn vị tri thức pháp luật đã chuẩn hóa để agent sử dụng.
 
-    ``article_id`` là id dùng trong vector store. ``database`` là nhóm pháp luật
-    logic. ``score`` chỉ có sau retrieval, không bắt buộc khi import.
+    ``id`` là khóa chính trong PostgreSQL/vector DB. ``category`` là nhóm luật
+    dùng để chia collection/index cho RAG.
     """
 
     id: str
-    article_id: str
     law_id: str
     law_name: str
     doc_type: str
-    database: str = "default"
+    category: str = Field("default", validation_alias=AliasChoices("category", "database"))
     chapter: str | None = None
     article: str
     article_title: str | None = None
@@ -31,6 +30,20 @@ class LegalArticle(BaseModel):
     author: str | None = None
     extra: set[str] = Field(default_factory=set)
     score: float | None = None
+
+    @computed_field
+    @property
+    def article_id(self) -> str:
+        """Alias nội bộ cho code cũ/vector store cần id ổn định."""
+
+        return self.id
+
+    @computed_field
+    @property
+    def database(self) -> str:
+        """Alias tương thích: database cũ chính là category hiện tại."""
+
+        return self.category
 
     @computed_field
     @property
@@ -70,10 +83,10 @@ class LegalArticle(BaseModel):
 
 
 class RetrievedCandidate(BaseModel):
-    """Một kết quả retrieval từ BM25, vector search, hybrid fusion hoặc MCP."""
+    """Một kết quả retrieval từ BM25, vector search hoặc hybrid fusion."""
 
     article: LegalArticle
-    source: Literal["bm25", "vector", "hybrid", "mcp", "related"] = "bm25"
+    source: Literal["bm25", "vector", "hybrid", "related"] = "bm25"
     score: float = 0.0
     rank: int | None = None
     reason: str | None = None
@@ -85,8 +98,18 @@ class RetrievalQuery(BaseModel):
     question: str
     original_question: str | None = None
     query_variants: list[str] = Field(default_factory=list)
-    databases: list[str] = Field(default_factory=lambda: ["default"])
+    categories: list[str] = Field(
+        default_factory=lambda: ["default"],
+        validation_alias=AliasChoices("categories", "databases"),
+    )
     top_k: int = 8
+    per_category: bool = False
+
+    @property
+    def databases(self) -> list[str]:
+        """Alias tương thích: databases cũ chính là categories hiện tại."""
+
+        return self.categories
 
     @property
     def all_queries(self) -> list[str]:
@@ -110,9 +133,18 @@ class LegalAnswerRequest(BaseModel):
     id: int | None = None
     session_id: str | None = None
     question: str
-    databases: list[str] = Field(default_factory=lambda: ["default"])
+    categories: list[str] = Field(
+        default_factory=lambda: ["default"],
+        validation_alias=AliasChoices("categories", "databases"),
+    )
     top_k: int = 8
     include_debug: bool = False
+
+    @property
+    def databases(self) -> list[str]:
+        """Alias tương thích cho router/UI cũ."""
+
+        return self.categories
 
 
 class LegalAnswerResponse(BaseModel):

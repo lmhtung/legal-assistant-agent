@@ -6,19 +6,14 @@
 
 ```json
 {
-  "id": "44_2013_ND_CP_Dieu_1",
+  "id": "1", 
   "law_id": "44/2013/NĐ-CP",
   "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
-  "doc_type": "Nghị định",
-  "database": "labor",
-  "chapter": "Chương I NHỮNG QUY ĐỊNH CHUNG",
+  "doc_type": "Nghị định", 
   "article": "Điều 1",
   "article_title": "Phạm vi điều chỉnh",
   "content": "Nghị định này quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động.",
   "author": "Chính phủ",
-  "extra": [
-    "Nghị định|44/2013/NĐ-CP|Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động|Điều 2"
-  ]
 }
 ```
 

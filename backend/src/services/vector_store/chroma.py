@@ -75,7 +75,8 @@ class ChromaLegalStore:
             "law_id": article.law_id,
             "law_name": article.law_name,
             "doc_type": article.doc_type,
-            "database": article.database,
+            "category": article.category,
+            "database": article.category,
             "chapter": article.chapter or "",
             "article": article.article,
             "article_title": article.article_title or "",
@@ -96,11 +97,10 @@ class ChromaLegalStore:
             score = 1.0 / (1.0 + float(distance or 0.0))
             article = LegalArticle(
                 id=str(metadata.get("id") or article_id),
-                article_id=article_id,
                 law_id=str(metadata.get("law_id") or ""),
                 law_name=str(metadata.get("law_name") or ""),
                 doc_type=str(metadata.get("doc_type") or ""),
-                database=str(metadata.get("database") or self.database),
+                category=str(metadata.get("category") or metadata.get("database") or self.database),
                 chapter=str(metadata.get("chapter") or "") or None,
                 article=str(metadata.get("article") or ""),
                 article_title=str(metadata.get("article_title") or "") or None,

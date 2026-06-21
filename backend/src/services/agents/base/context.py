@@ -5,13 +5,15 @@ from pydantic import BaseModel, Field
 
 
 class AgentContext(BaseModel):
-    """Các tùy chọn runtime không nên trộn trực tiếp vào câu hỏi người dùng.
-
-    Context giúp state rõ ràng hơn: câu hỏi là dữ liệu đầu vào chính, còn
-    ``databases``, ``top_k`` hay flag rewrite là điều khiển cách agent xử lý.
-    """
+    """Các tùy chọn runtime không trộn trực tiếp vào câu hỏi người dùng."""
 
     session_id: str | None = None
-    databases: list[str] = Field(default_factory=lambda: ["default"])
+    categories: list[str] = Field(default_factory=lambda: ["default"])
     top_k: int = 8
     rewrite_query_enabled: bool = True
+
+    @property
+    def databases(self) -> list[str]:
+        """Alias tương thích: database cũ chính là category hiện tại."""
+
+        return self.categories

@@ -1,89 +1,152 @@
-"""Lexical retrieval store dùng như nhánh BM25-like của hybrid search."""
+"""BM25 lexical retrieval store dùng làm nhánh sparse của hybrid search."""
 from __future__ import annotations
 
 import math
 import re
-from collections import Counter
 
 from src.schemas.legal import LegalArticle, RetrievalQuery, RetrievedCandidate
+
+try:  # underthesea giúp tách từ tiếng Việt tốt hơn regex thường.
+    from underthesea import text_normalize, word_tokenize
+except ImportError:  # pragma: no cover - fallback khi môi trường chưa cài dependency
+    text_normalize = None
+    word_tokenize = None
+
+try:  # rank_bm25 là implementation BM25 chuẩn, giống hướng project mẫu.
+    from rank_bm25 import BM25Okapi
+except ImportError:  # pragma: no cover - fallback thủ công bên dưới
+    BM25Okapi = None
 
 _TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 
 
-def tokenize(text: str) -> list[str]:
-    """Tách token đơn giản cho tiếng Việt/văn bản pháp luật.
+def tokenize(text: str, mode: str = "auto") -> list[str]:
+    """Tách token cho search keyword tiếng Việt.
 
-    Đây không phải Vietnamese tokenizer đầy đủ, nhưng đủ tốt cho tín hiệu exact
-    match như số hiệu văn bản, số điều, thuật ngữ pháp lý và tên riêng.
+    ``auto`` ưu tiên underthesea nếu có, sau đó fallback regex. Regex vẫn hữu ích
+    cho số hiệu văn bản như ``41/2024/QH15`` vì giữ được các mảnh số/chữ.
     """
 
-    return [token.lower() for token in _TOKEN_RE.findall(text)]
+    normalized = text.lower()
+    if mode in {"auto", "underthesea"} and text_normalize and word_tokenize:
+        normalized = text_normalize(normalized)
+        tokens = word_tokenize(normalized)
+        return [token.strip().lower() for token in tokens if token.strip()]
+    return [token.lower() for token in _TOKEN_RE.findall(normalized)]
 
 
 class InMemoryLegalStore:
-    """Index lexical nhỏ, chạy trong RAM.
+    """BM25 store chạy trong RAM cho từng category pháp luật.
 
-    Store này không thay thế Elasticsearch/OpenSearch. Nó bổ sung tín hiệu từ
-    khóa cho hybrid retrieval, nhất là khi người dùng hỏi đúng số hiệu luật hoặc
-    tên điều mà embedding đôi khi làm mờ.
+    Store này index ``LegalArticle.vector_text`` và dùng BM25Okapi khi package
+    ``rank_bm25`` có sẵn. Nếu dependency chưa được cài, nó fallback sang công
+    thức BM25 nhỏ gọn để service vẫn chạy được trong môi trường nhẹ.
     """
 
-    def __init__(self, database: str = "default") -> None:
+    def __init__(
+        self,
+        database: str = "default",
+        tokenizer: str = "auto",
+        k1: float = 2.0,
+        b: float = 1.0,
+        epsilon: float = 0.5,
+    ) -> None:
         self.database = database
+        self.tokenizer = tokenizer
+        self.k1 = k1
+        self.b = b
+        self.epsilon = epsilon
         self._articles: dict[str, LegalArticle] = {}
-        self._term_freqs: dict[str, Counter[str]] = {}
-        self._doc_freqs: Counter[str] = Counter()
+        self._article_ids: list[str] = []
+        self._tokenized_corpus: list[list[str]] = []
+        self._bm25 = None
 
     def add_articles(self, articles: list[LegalArticle]) -> None:
-        """Index text chuẩn của từng record vào bộ đếm term frequency."""
+        """Index text chuẩn của từng record vào BM25 corpus."""
 
         for article in articles:
-            article.database = article.database or self.database
-            self._articles[article.article_id] = article
-            self._term_freqs[article.article_id] = Counter(tokenize(index_text(article)))
-        self._rebuild_doc_freqs()
+            indexed = article.model_copy(update={"category": article.category or self.database})
+            self._articles[indexed.article_id] = indexed
+        self._rebuild_index()
 
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
-        """Tính score TF-IDF/BM25-like cho các record trong RAM."""
+        """Search BM25 theo toàn bộ query variants và trả top_k candidate."""
 
-        query_terms: list[str] = []
-        for query_text in query.all_queries:
-            query_terms.extend(tokenize(query_text))
-        if not query_terms:
+        if not self._article_ids:
+            return []
+        query_text = " ".join(query.all_queries)
+        query_tokens = tokenize(query_text, self.tokenizer)
+        if not query_tokens:
             return []
 
-        query_counter = Counter(query_terms)
-        total_docs = max(len(self._articles), 1)
-        scored: list[RetrievedCandidate] = []
-        for article_id, article in self._articles.items():
-            terms = self._term_freqs.get(article_id, Counter())
+        scores = self._score(query_tokens)
+        query_token_set = set(query_tokens)
+        ranked_indices = sorted(
+            range(len(scores)),
+            key=lambda index: (scores[index], self._overlap_count(index, query_token_set)),
+            reverse=True,
+        )[: query.top_k]
+        candidates: list[RetrievedCandidate] = []
+        for rank, index in enumerate(ranked_indices, start=1):
+            raw_score = float(scores[index])
+            # Với corpus nhỏ, BM25Okapi có thể trả 0 cho nhiều token. Vẫn giữ
+            # kết quả top-rank để hybrid RRF có tín hiệu sparse như project mẫu.
+            score = raw_score if raw_score > 0 else 1.0 / rank
+            article = self._articles[self._article_ids[index]].model_copy(update={"score": score})
+            candidates.append(RetrievedCandidate(article=article, source="bm25", score=score, rank=rank))
+        return candidates
+
+    def _rebuild_index(self) -> None:
+        """Tạo lại corpus và BM25 model sau khi add/update record."""
+
+        self._article_ids = list(self._articles)
+        self._tokenized_corpus = [tokenize(index_text(self._articles[article_id]), self.tokenizer) for article_id in self._article_ids]
+        if BM25Okapi is not None:
+            self._bm25 = BM25Okapi(
+                self._tokenized_corpus if self._tokenized_corpus else [[]],
+                k1=self.k1,
+                b=self.b,
+                epsilon=self.epsilon,
+            )
+        else:
+            self._bm25 = None
+
+    def _score(self, query_tokens: list[str]) -> list[float]:
+        """Tính score bằng rank_bm25 hoặc fallback BM25 thủ công."""
+
+        if self._bm25 is not None:
+            return [float(score) for score in self._bm25.get_scores(query_tokens)]
+        return self._manual_bm25_scores(query_tokens)
+
+    def _overlap_count(self, index: int, query_token_set: set[str]) -> int:
+        """Đếm token trùng để phá hòa khi BM25 score bằng nhau."""
+
+        return len(set(self._tokenized_corpus[index]) & query_token_set)
+
+    def _manual_bm25_scores(self, query_tokens: list[str]) -> list[float]:
+        """Fallback BM25 nhỏ gọn khi rank_bm25 chưa được cài."""
+
+        total_docs = len(self._tokenized_corpus)
+        doc_lengths = [len(doc) for doc in self._tokenized_corpus]
+        avgdl = sum(doc_lengths) / max(total_docs, 1)
+        doc_freq: dict[str, int] = {}
+        for doc in self._tokenized_corpus:
+            for token in set(doc):
+                doc_freq[token] = doc_freq.get(token, 0) + 1
+
+        scores: list[float] = []
+        for doc, doc_len in zip(self._tokenized_corpus, doc_lengths):
             score = 0.0
-            for term, query_weight in query_counter.items():
-                tf = terms.get(term, 0)
+            for token in query_tokens:
+                tf = doc.count(token)
                 if not tf:
                     continue
-                df = self._doc_freqs.get(term, 0)
-                idf = math.log((1 + total_docs) / (1 + df)) + 1.0
-                score += query_weight * (1 + math.log(tf)) * idf
-            if score > 0:
-                scored.append(
-                    RetrievedCandidate(
-                        article=article.model_copy(update={"score": score}),
-                        source="bm25",
-                        score=score,
-                    )
-                )
-        scored.sort(key=lambda item: item.score, reverse=True)
-        for rank, candidate in enumerate(scored[: query.top_k], start=1):
-            candidate.rank = rank
-        return scored[: query.top_k]
-
-    def _rebuild_doc_freqs(self) -> None:
-        """Tính lại document frequency sau mỗi lần add/update record."""
-
-        self._doc_freqs = Counter()
-        for terms in self._term_freqs.values():
-            self._doc_freqs.update(terms.keys())
+                df = doc_freq.get(token, 0)
+                idf = math.log(1 + (total_docs - df + 0.5) / (df + 0.5))
+                denominator = tf + self.k1 * (1 - self.b + self.b * doc_len / max(avgdl, 1e-9))
+                score += idf * (tf * (self.k1 + 1)) / denominator
+            scores.append(score)
+        return scores
 
 
 def index_text(article: LegalArticle) -> str:
