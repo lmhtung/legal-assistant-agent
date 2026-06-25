@@ -7,8 +7,7 @@ import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, Conver
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 const DEFAULT_DATABASE = process.env.NEXT_PUBLIC_DEFAULT_DATABASE || "default";
-const STORAGE_KEY = "mscai_conversations";
-const ACTIVE_KEY = "mscai_active_conversation_id";
+const LEGACY_STORAGE_KEYS = ["mscai_conversations", "mscai_active_conversation_id", "mscai_session_id"];
 
 function createId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -26,15 +25,6 @@ function compactTitle(text: string) {
   return value.length > 44 ? `${value.slice(0, 44)}...` : value || "Đoạn chat mới";
 }
 
-function readConversations(): Conversation[] {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
 
 function describeValue(value: unknown) {
   if (Array.isArray(value)) return value.length ? value.join(", ") : "không có";
@@ -137,21 +127,13 @@ export default function Home() {
   const messages = activeConversation?.messages || [];
 
   useEffect(() => {
-    const stored = readConversations();
-    const initial = stored.length ? stored : [createConversation()];
-    const active = window.localStorage.getItem(ACTIVE_KEY);
+    for (const key of LEGACY_STORAGE_KEYS) {
+      window.localStorage.removeItem(key);
+    }
+    const initial = [createConversation()];
     setConversations(initial);
-    setActiveId(active && initial.some((item) => item.id === active) ? active : initial[0].id);
+    setActiveId(initial[0].id);
   }, []);
-
-  useEffect(() => {
-    if (!conversations.length) return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-  }, [conversations]);
-
-  useEffect(() => {
-    if (activeId) window.localStorage.setItem(ACTIVE_KEY, activeId);
-  }, [activeId]);
 
   useEffect(() => {
     const element = scrollRef.current;

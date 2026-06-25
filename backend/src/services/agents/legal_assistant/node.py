@@ -20,6 +20,7 @@ from src.services.agents.legal_assistant.prompt import (
     build_intent_prompt,
     build_legal_context_message,
     build_rewrite_query_prompt,
+    default_law_category_slugs,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
 from src.services.agents.legal_assistant.tools import search_legal_articles
@@ -78,9 +79,10 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
         return state
 
     settings = runtime.settings.legal_assistant.categories
+    available_categories = settings.available or default_law_category_slugs()
     mode = state.get("retrieval_mode")
     if mode == "hyde":
-        categories = settings.available or state.get("categories") or settings.default
+        categories = available_categories or state.get("categories") or settings.default
         state["categories"] = categories
         state["per_category"] = False
         state["retrieval_top_k"] = settings.hyde_top_k
@@ -88,10 +90,10 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
 
     query = state.get("retrieval_question") or state["question"]
     categories = state.get("categories") or settings.default
-    if settings.available and runtime.llm is not None:
+    if available_categories and runtime.llm is not None:
         try:
-            raw = await runtime.llm.ainvoke(build_category_prompt(query, settings.available))
-            categories = _parse_categories(raw, settings.available) or categories
+            raw = await runtime.llm.ainvoke(build_category_prompt(query, available_categories))
+            categories = _parse_categories(raw, available_categories) or categories
         except Exception as exc:  # pragma: no cover
             state.setdefault("debug", {})["category_error"] = str(exc)
 
@@ -101,7 +103,7 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
         settings.top_k_when_le_2_categories if len(categories) <= 2 else settings.top_k_when_many_categories
     )
     state.setdefault("tool_calls", []).append(
-        {"name": "classify_categories", "provider": "llm" if settings.available and runtime.llm else "config", "result": categories}
+        {"name": "classify_categories", "provider": "llm" if available_categories and runtime.llm else "config", "result": categories}
     )
     return state
 

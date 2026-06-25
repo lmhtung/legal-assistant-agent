@@ -1,7 +1,58 @@
 """Prompt tối giản cho legal assistant."""
 from __future__ import annotations
 
+import json
+import re
+import unicodedata
+from functools import lru_cache
+from pathlib import Path
+
 from src.schemas.legal import LegalArticle
+
+CATEGORY_FILE = Path(__file__).resolve().parents[4] / "categories" / "law_names.json"
+
+
+def slugify_law_name(name: str) -> str:
+    """Chuyển tên luật tiếng Việt thành category slug ổn định."""
+
+    value = unicodedata.normalize("NFD", name.lower())
+    value = "".join(char for char in value if unicodedata.category(char) != "Mn")
+    value = value.replace("đ", "d")
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value or "default"
+
+
+def describe_law_category(name: str) -> str:
+    """Tạo mô tả ngắn khoảng 15 từ cho từng category luật."""
+
+    return f"Nhóm quy định về {name.lower()}, gồm phạm vi áp dụng, thủ tục, quyền và nghĩa vụ."
+
+
+@lru_cache(maxsize=1)
+def load_law_categories() -> list[dict[str, str]]:
+    """Đọc law_names.json và tạo category slug + mô tả cho prompt phân loại."""
+
+    try:
+        names = json.loads(CATEGORY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        names = []
+    output: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for name in names:
+        if not isinstance(name, str) or not name.strip():
+            continue
+        slug = slugify_law_name(name)
+        if slug in seen:
+            continue
+        seen.add(slug)
+        output.append({"slug": slug, "name": name.strip(), "description": describe_law_category(name.strip())})
+    return output
+
+
+def default_law_category_slugs() -> list[str]:
+    """Danh sách category mặc định sinh từ backend/categories/law_names.json."""
+
+    return [item["slug"] for item in load_law_categories()]
 
 SYSTEM_PROMPT = """Bạn là MscAI, trợ lý AI hỗ trợ tra cứu và giải thích pháp luật Việt Nam.
 
@@ -41,7 +92,8 @@ Câu hỏi: {question}
 CATEGORY_PROMPT = """Bạn là bộ phân loại category luật cho legal RAG.
 
 Dựa trên câu hỏi/truy vấn, chọn các category pháp luật liên quan nhất từ danh sách cho sẵn. Chỉ chọn category có trong danh sách.
-Trả về JSON array, ví dụ: ["luat_dau_thau", "luat_ho_tro_doanh_nghiep_vua_va_nho"].
+Mỗi dòng gồm: category_slug | tên luật | mô tả ngắn. Chỉ trả về category_slug.
+Trả về JSON array, ví dụ: ["luat_dau_thau", "luat_ho_tro_doanh_nghiep_nho_va_vua"].
 Nếu không chắc, trả về tối đa 3 category có khả năng liên quan nhất.
 
 Danh sách category:
@@ -63,8 +115,17 @@ def build_hyde_prompt(question: str) -> str:
     return HYDE_PROMPT.format(question=question)
 
 
-def build_category_prompt(query: str, categories: list[str]) -> str:
-    values = "\n".join(f"- {item}" for item in categories)
+def build_category_prompt(query: str, categories: list[str] | None = None) -> str:
+    requested = categories or default_law_category_slugs()
+    known = {item["slug"]: item for item in load_law_categories()}
+    lines: list[str] = []
+    for slug in requested:
+        item = known.get(slug)
+        if item:
+            lines.append(f"- {item['slug']} | {item['name']} | {item['description']}")
+        else:
+            lines.append(f"- {slug} | {slug} | Nhóm quy định pháp luật liên quan trực tiếp đến chủ đề {slug}.")
+    values = "\n".join(lines)
     return CATEGORY_PROMPT.format(query=query, categories=values)
 
 
