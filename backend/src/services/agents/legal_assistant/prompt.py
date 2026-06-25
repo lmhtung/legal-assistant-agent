@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.schemas.legal import LegalArticle
 
-CATEGORY_FILE = Path(__file__).resolve().parents[4] / "categories" / "law_names.json"
+CATEGORY_FILE = Path(__file__).resolve().parents[4] / "src" /"categories" / "law_names.json"
 
 
 def slugify_law_name(name: str) -> str:

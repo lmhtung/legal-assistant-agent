@@ -6,7 +6,7 @@ llm:
   api_key: sk-1234
   base_url: http://localhost:8016/v1
   default_model: qwen3-14b
-  temperature: 3.0
+  temperature: 1.0
 
 embeddings:
   api_key: sk-1234
