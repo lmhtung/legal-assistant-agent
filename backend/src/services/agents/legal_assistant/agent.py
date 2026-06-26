@@ -40,6 +40,11 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         super().__init__()
 
     def build_initial_state(self, request: LegalAnswerRequest) -> LegalAssistantState:
+        competition_mode = (
+            request.competition_mode
+            if request.competition_mode is not None
+            else self.settings.legal_assistant.competition.enabled
+        )
         context = AgentContext(
             session_id=request.session_id,
             categories=request.categories,
@@ -50,6 +55,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             "question_id": request.id,
             "session_id": request.session_id,
             "question": request.question,
+            "competition_mode": bool(competition_mode),
             "retrieval_question": request.question,
             "retrieval_mode": self.settings.legal_assistant.retrieval.query_mode,
             "query_variants": [request.question],
@@ -89,6 +95,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                 {
                     "tool_calls": state.get("tool_calls", []),
                     "legal_flag": state.get("legal_flag"),
+                    "competition_mode": state.get("competition_mode", False),
                     "retrieval_mode": state.get("retrieval_mode"),
                     "retrieval_question": state.get("retrieval_question"),
                     "query_variants": state.get("query_variants", []),

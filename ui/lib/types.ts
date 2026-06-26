@@ -26,6 +26,14 @@ export type LegalAnswerResponse = {
   debug: Record<string, unknown>;
 };
 
+export type CompetitionRecord = {
+  id?: number | null;
+  question: string;
+  answer: string;
+  relevant_docs: string[];
+  relevant_articles: string[];
+};
+
 export type ChatResponse = {
   session_id?: string | null;
   message: string;

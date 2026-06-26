@@ -39,6 +39,22 @@ async def analyze_intent_node(runtime: Any, state: LegalAssistantState) -> Legal
         "Đã sẵn sàng ngữ cảnh hội thoại",
         metadata={"enabled": runtime.settings.short_memory.enabled},
     )
+    if state.get("competition_mode"):
+        state["legal_flag"] = "NEXT"
+        state["skip_retrieval"] = False
+        state.setdefault("tool_calls", []).append(
+            {"name": "analyze_intent", "provider": "competition", "result": "NEXT"}
+        )
+        await emit_progress(
+            "intent",
+            "completed",
+            "Competition mode: bỏ qua intent",
+            elapsed_ms=_elapsed_ms(started),
+            detail="Đi thẳng vào legal RAG để chạy tập test.",
+            metadata={"legal_flag": "NEXT", "competition_mode": True},
+        )
+        return state
+
     await emit_progress(
         "intent",
         "started",

@@ -37,9 +37,15 @@ embeddings:
   model: bge-m3
 
 legal_assistant:
+  competition:
+    enabled: false
   postgres:
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
 ```
+
+`legal_assistant.competition.enabled=true` dùng khi chạy tập test: agent bỏ qua
+bước Intent và đi thẳng vào legal RAG. UI cũng có nút `Competition` để bật tạm
+thời mà không cần sửa YAML.
 
 Sau khi sửa YAML, restart service liên quan.
 
@@ -116,6 +122,29 @@ npm run dev
 UI gọi `/backend-api/...`. Next.js proxy đọc `app.port` trực tiếp từ
 `backend/config.yaml`, nên không cần `.env.local`.
 
+## Competition mode
+
+Input tập test là JSON array trực tiếp:
+
+```json
+[
+  {
+    "id": 1,
+    "question": "Các cơ sở ươm tạo và khu làm việc chung được hưởng những chính sách hỗ trợ nào về thuế và đất đai?"
+  }
+]
+```
+
+Endpoint backend:
+
+```text
+POST /api/v1/legal/competition
+```
+
+Response là array submit tối giản gồm `id`, `question`, `answer`,
+`relevant_docs`, `relevant_articles`. Trong UI, bật nút `Competition`, chọn file
+`.json`, kết quả sẽ hiện trong đoạn chat hiện tại.
+
 ## Dataset và index
 
 Dataset mặc định:
@@ -130,5 +159,8 @@ Luồng:
 JSON -> PostgreSQL -> backend startup -> Chroma + BM25 -> agent
 ```
 
-Script import upsert theo `id` và xóa Chroma manifest. Backend sẽ rebuild vector
-index ở lần khởi động kế tiếp. Dataset hiện có 13.969 record thuộc 57 category.
+Script import upsert theo `id` và xóa manifest/cache retrieval. Backend sẽ rebuild
+Chroma/BM25 ở lần khởi động kế tiếp. Sau đó BM25 được nạp từ
+`backend/chroma_db/legal_bm25_cache.json`, nên không tokenize lại ở mỗi lần
+restart nếu config và dữ liệu không đổi. Dataset hiện có 13.969 record thuộc 57
+category.

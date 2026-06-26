@@ -29,6 +29,26 @@ uv run python scripts/load_postgres.py --truncate
 
 Dataset mặc định là `src/categories/crawled_articles_category.json`.
 
+## Competition mode
+
+Trong `config.yaml`:
+
+```yaml
+legal_assistant:
+  competition:
+    enabled: false
+```
+
+Khi bật `true`, agent bỏ qua Intent và luôn chạy legal RAG. Endpoint nhận trực
+tiếp JSON array tập test:
+
+```text
+POST /api/v1/legal/competition
+```
+
+Response trả array tối giản theo format submit: `id`, `question`, `answer`,
+`relevant_docs`, `relevant_articles`.
+
 ## Auto index
 
 Khi startup, backend:

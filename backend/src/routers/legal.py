@@ -20,6 +20,7 @@ from src.schemas.api.chat import (
     ChatStreamStatusEvent,
     CompetitionBatchRequest,
     CompetitionBatchResponse,
+    CompetitionRecord,
 )
 from src.schemas.legal import LegalAnswerRequest, LegalAnswerResponse
 from src.services.agents.legal_assistant import LegalAssistantAgent
@@ -48,6 +49,7 @@ async def chat(
         LegalAnswerRequest(
             session_id=request.session_id,
             question=request.message,
+            competition_mode=request.competition_mode,
             databases=request.databases,
             top_k=request.top_k,
             include_debug=True,
@@ -90,6 +92,7 @@ async def chat_stream(
         answer_request = LegalAnswerRequest(
             session_id=request.session_id,
             question=request.message,
+            competition_mode=request.competition_mode,
             databases=request.databases,
             top_k=request.top_k,
             include_debug=True,
@@ -185,6 +188,22 @@ async def chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/competition", response_model=list[CompetitionRecord])
+async def answer_competition(
+    request: list[LegalAnswerRequest],
+    agent: LegalAssistantAgent = Depends(get_legal_assistant_agent),
+) -> list[dict]:
+    """Nhận trực tiếp JSON array tập test và trả array kết quả submit tối giản."""
+
+    results: list[dict] = []
+    for item in request:
+        answer = await agent.answer(
+            item.model_copy(update={"competition_mode": True, "session_id": None, "include_debug": False})
+        )
+        results.append(answer.to_competition_record())
+    return results
 
 
 @router.post("/batch", response_model=CompetitionBatchResponse)

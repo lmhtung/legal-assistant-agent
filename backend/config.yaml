@@ -22,6 +22,8 @@ short_memory:
 
 
 legal_assistant:
+  competition:
+    enabled: false # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
   retrieval:
     query_mode: rewrite # none | rewrite | hyde
   query_rewrite:

@@ -84,6 +84,12 @@ class ShortMemorySettings(ConfigModel):
     enabled: bool = True
 
 
+class CompetitionSettings(ConfigModel):
+    """Bật mode chạy tập test: luôn coi query là câu hỏi luật."""
+
+    enabled: bool = False
+
+
 class RetrievalSettings(ConfigModel):
     """Chọn text đem đi embedding/search: none, rewrite hoặc hyde."""
 
@@ -156,6 +162,7 @@ class VectorStoreSettings(ConfigModel):
 class LegalAssistantSettings(ConfigModel):
     """Nhóm cấu hình riêng cho agent pháp lý."""
 
+    competition: CompetitionSettings = Field(default_factory=CompetitionSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
     categories: CategorySettings = Field(default_factory=CategorySettings)

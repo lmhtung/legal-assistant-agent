@@ -130,6 +130,7 @@ class LegalAnswerRequest(BaseModel):
     id: int | None = None
     session_id: str | None = None
     question: str
+    competition_mode: bool | None = None
     categories: list[str] = Field(
         default_factory=lambda: ["default"],
         validation_alias=AliasChoices("categories", "databases"),

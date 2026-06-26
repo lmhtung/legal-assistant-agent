@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     question_id: int | None
     session_id: str | None
     question: str
+    competition_mode: bool
     legal_flag: str
     rewritten_question: str
     hypothetical_answer: str

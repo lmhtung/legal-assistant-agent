@@ -15,6 +15,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     databases: list[str] = Field(default_factory=lambda: ["default"])
     top_k: int = 8
+    competition_mode: bool | None = None
 
 
 class ChatResponse(BaseModel):
@@ -68,6 +69,16 @@ class ChatStreamErrorEvent(BaseModel):
 ChatStreamEvent: TypeAlias = (
     ChatStreamStatusEvent | ChatStreamResultEvent | ChatStreamDoneEvent | ChatStreamErrorEvent
 )
+
+
+class CompetitionRecord(BaseModel):
+    """Một dòng kết quả submit tối giản cho cuộc thi."""
+
+    id: int | None = None
+    question: str
+    answer: str
+    relevant_docs: list[str] = Field(default_factory=list)
+    relevant_articles: list[str] = Field(default_factory=list)
 
 
 class CompetitionBatchRequest(BaseModel):

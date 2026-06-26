@@ -1,9 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, MessageSquarePlus, PanelLeft, Search, Send, SquarePen, Trash2 } from "lucide-react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, FileUp, MessageSquarePlus, PanelLeft, Search, Send, SquarePen, Trash2 } from "lucide-react";
 import { parseSseChunk } from "@/lib/sse";
-import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, Conversation } from "@/lib/types";
+import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, CompetitionRecord, Conversation } from "@/lib/types";
 
 const API_BASE = "/backend-api";
 const DEFAULT_DATABASE = process.env.NEXT_PUBLIC_DEFAULT_DATABASE || "default";
@@ -98,12 +98,14 @@ export default function Home() {
   const [activeId, setActiveId] = useState("");
   const [input, setInput] = useState("");
   const [showStream, setShowStream] = useState(true);
+  const [competitionMode, setCompetitionMode] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const competitionFileRef = useRef<HTMLInputElement>(null);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeId) || conversations[0],
@@ -254,6 +256,7 @@ export default function Home() {
           message: text,
           databases: [DEFAULT_DATABASE],
           top_k: 8,
+          competition_mode: competitionMode,
         }),
       });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
@@ -288,6 +291,113 @@ export default function Home() {
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void submitChat(input);
+  }
+
+
+  function normalizeCompetitionItems(value: unknown) {
+    if (!Array.isArray(value)) throw new Error("File phải là JSON array.");
+    return value.map((item, index) => {
+      if (!item || typeof item !== "object") throw new Error(`Item ${index + 1} không phải object.`);
+      const record = item as { id?: unknown; question?: unknown };
+      if (typeof record.question !== "string" || !record.question.trim()) {
+        throw new Error(`Item ${index + 1} thiếu question.`);
+      }
+      return {
+        id: typeof record.id === "number" ? record.id : index + 1,
+        question: record.question.trim(),
+        competition_mode: true,
+      };
+    });
+  }
+
+  async function handleCompetitionFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || isSending) return;
+
+    const conversationId = activeConversation?.id || createConversation().id;
+    const assistantId = createId();
+    setIsSending(true);
+
+    try {
+      const items = normalizeCompetitionItems(JSON.parse(await file.text()));
+      const userMessage: ChatMessage = {
+        id: createId(),
+        role: "user",
+        content: `Competition file: ${file.name} (${items.length} câu hỏi)`,
+        stream: [],
+        trace: [],
+        sources: [],
+      };
+      const assistantMessage: ChatMessage = {
+        id: assistantId,
+        role: "assistant",
+        content: "Đang chạy competition mode...",
+        stream: [],
+        trace: [
+          {
+            stage: "client",
+            status: "completed",
+            title: "Gửi file",
+            detail: `POST ${API_BASE}/api/v1/legal/competition · ${items.length} câu hỏi`,
+            tone: "success",
+          },
+        ],
+        sources: [],
+      };
+      patchConversation(conversationId, (conversation) => ({
+        ...conversation,
+        title: conversation.messages.length ? conversation.title : compactTitle(file.name),
+        messages: [...conversation.messages, userMessage, assistantMessage],
+        updatedAt: Date.now(),
+      }));
+      setActiveId(conversationId);
+
+      const response = await fetch(`${API_BASE}/api/v1/legal/competition`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(items),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const results = (await response.json()) as CompetitionRecord[];
+      updateAssistant(conversationId, assistantId, (message) => ({
+        ...message,
+        content: `Hoàn tất ${results.length} câu hỏi.\n\n${JSON.stringify(results, null, 2)}`,
+        sources: Array.from(new Set(results.flatMap((item) => item.relevant_articles || []))).slice(0, 8),
+        trace: [
+          ...message.trace,
+          {
+            stage: "result",
+            status: "completed",
+            title: "Kết quả competition",
+            detail: `Nhận ${results.length} record submit.`,
+            tone: "success",
+          },
+        ],
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không xử lý được file competition.";
+      patchConversation(conversationId, (conversation) => {
+        const hasAssistant = conversation.messages.some((item) => item.id === assistantId);
+        const assistantMessage: ChatMessage = {
+          id: assistantId,
+          role: "assistant",
+          content: message,
+          stream: [],
+          trace: [{ title: "Lỗi competition", detail: message, tone: "error" }],
+          sources: [],
+        };
+        return {
+          ...conversation,
+          messages: hasAssistant
+            ? conversation.messages.map((item) => (item.id === assistantId ? assistantMessage : item))
+            : [...conversation.messages, assistantMessage],
+          updatedAt: Date.now(),
+        };
+      });
+    } finally {
+      setIsSending(false);
+    }
   }
 
   return (
@@ -345,6 +455,9 @@ export default function Home() {
           <button className="traceButton" onClick={() => setShowStream((value) => !value)} type="button" aria-pressed={showStream}>
             <Activity size={17} /> {showStream ? "Ẩn luồng" : "Hiện luồng"}
           </button>
+          <button className="traceButton" onClick={() => setCompetitionMode((value) => !value)} type="button" aria-pressed={competitionMode}>
+            <FileUp size={17} /> Competition
+          </button>
           {isSending ? <span className="loader" aria-label="Đang xử lý" /> : null}
         </header>
         <div className="messages" ref={scrollRef}>
@@ -386,22 +499,43 @@ export default function Home() {
         </div>
 
         <div className={sidebarOpen ? "composerWrap" : "composerWrap full"}>
-          <form className="composer" onSubmit={onSubmit}>
-            <button className="iconButton" type="button" onClick={newChat} aria-label="Đoạn chat mới"><SquarePen size={20} /></button>
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  void submitChat(input);
-                }
-              }}
-              rows={1}
-              placeholder="Hỏi bất kỳ điều gì"
-            />
-            <button className="sendButton" disabled={isSending || !input.trim()} type="submit" aria-label="Gửi"><Send size={18} /></button>
-          </form>
+          {competitionMode ? (
+            <div className="composer competitionComposer">
+              <button className="iconButton" type="button" onClick={newChat} aria-label="Đoạn chat mới"><SquarePen size={20} /></button>
+              <button
+                className="fileButton"
+                type="button"
+                disabled={isSending}
+                onClick={() => competitionFileRef.current?.click()}
+              >
+                <FileUp size={19} /> Chọn file JSON tập test
+              </button>
+              <input
+                ref={competitionFileRef}
+                className="hiddenFile"
+                type="file"
+                accept="application/json,.json"
+                onChange={handleCompetitionFile}
+              />
+            </div>
+          ) : (
+            <form className="composer" onSubmit={onSubmit}>
+              <button className="iconButton" type="button" onClick={newChat} aria-label="Đoạn chat mới"><SquarePen size={20} /></button>
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitChat(input);
+                  }
+                }}
+                rows={1}
+                placeholder="Hỏi bất kỳ điều gì"
+              />
+              <button className="sendButton" disabled={isSending || !input.trim()} type="submit" aria-label="Gửi"><Send size={18} /></button>
+            </form>
+          )}
         </div>
       </section>
     </main>
