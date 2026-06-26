@@ -48,3 +48,29 @@ class LLMClient:
                 f"Không gọi được LLM endpoint {self.base_url}, model {self.model_name}: {exc}"
             ) from exc
         return response.content
+
+    async def astream(self, prompt: str):
+        """Stream token từ chat model bằng plain prompt."""
+
+        try:
+            async for chunk in self.chat.astream(prompt):
+                token = getattr(chunk, "content", "") or ""
+                if token:
+                    yield str(token)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Không stream được LLM endpoint {self.base_url}, model {self.model_name}: {exc}"
+            ) from exc
+
+    async def astream_messages(self, messages):
+        """Stream token từ chat model bằng danh sách LangChain messages."""
+
+        try:
+            async for chunk in self.chat.astream(messages):
+                token = getattr(chunk, "content", "") or ""
+                if token:
+                    yield str(token)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Không stream được LLM endpoint {self.base_url}, model {self.model_name}: {exc}"
+            ) from exc

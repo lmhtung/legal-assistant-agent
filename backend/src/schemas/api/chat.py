@@ -8,6 +8,14 @@ from pydantic import BaseModel, Field
 from src.schemas.legal import LegalAnswerRequest, LegalAnswerResponse
 
 
+class LegalRuntimeConfig(BaseModel):
+    """Config runtime tối thiểu để UI chọn endpoint chat phù hợp."""
+
+    chat_streaming: bool = True
+    token_streaming: bool = True
+    competition_enabled: bool = False
+
+
 class ChatRequest(BaseModel):
     """Request kiểu chat, được map nội bộ sang ``LegalAnswerRequest``."""
 
@@ -45,6 +53,20 @@ class ChatStreamStatusEvent(BaseModel):
     data: ChatStreamMessagePayload
 
 
+class ChatStreamTokenPayload(BaseModel):
+    """Payload token do LLM stream ra trong node answer."""
+
+    token: str
+    stage: str = "answer"
+
+
+class ChatStreamTokenEvent(BaseModel):
+    """Event token-by-token để UI append vào bubble assistant."""
+
+    event: Literal["token"] = "token"
+    data: ChatStreamTokenPayload
+
+
 class ChatStreamResultEvent(BaseModel):
     """Event chứa response cuối cùng của chat."""
 
@@ -67,7 +89,11 @@ class ChatStreamErrorEvent(BaseModel):
 
 
 ChatStreamEvent: TypeAlias = (
-    ChatStreamStatusEvent | ChatStreamResultEvent | ChatStreamDoneEvent | ChatStreamErrorEvent
+    ChatStreamStatusEvent
+    | ChatStreamTokenEvent
+    | ChatStreamResultEvent
+    | ChatStreamDoneEvent
+    | ChatStreamErrorEvent
 )
 
 

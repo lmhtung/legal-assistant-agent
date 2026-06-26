@@ -84,10 +84,28 @@ class ShortMemorySettings(ConfigModel):
     enabled: bool = True
 
 
+class ChatSettings(ConfigModel):
+    """Cấu hình cách endpoint chat trả kết quả cho UI/client."""
+
+    streaming: bool = True
+    token_streaming: bool = True
+
+
 class CompetitionSettings(ConfigModel):
     """Bật mode chạy tập test: luôn coi query là câu hỏi luật."""
 
     enabled: bool = False
+    max_concurrency: int = Field(default=4, ge=1)
+    save_outputs: bool = True
+    output_dir: Path = Path("./outputs")
+
+    @model_validator(mode="after")
+    def resolve_output_dir(self):
+        """Chuẩn hóa thư mục lưu kết quả competition dưới backend."""
+
+        if not self.output_dir.is_absolute():
+            self.output_dir = PRJ_ROOT / self.output_dir
+        return self
 
 
 class RetrievalSettings(ConfigModel):
@@ -162,6 +180,7 @@ class VectorStoreSettings(ConfigModel):
 class LegalAssistantSettings(ConfigModel):
     """Nhóm cấu hình riêng cho agent pháp lý."""
 
+    chat: ChatSettings = Field(default_factory=ChatSettings)
     competition: CompetitionSettings = Field(default_factory=CompetitionSettings)
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)

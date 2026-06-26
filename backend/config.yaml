@@ -22,8 +22,14 @@ short_memory:
 
 
 legal_assistant:
+  chat:
+    streaming: true # true: UI gọi /chat/stream; false: UI gọi /chat
+    token_streaming: true # true: stream token LLM trong bubble chat
   competition:
     enabled: false # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
+    max_concurrency: 4 # số câu hỏi competition chạy song song
+    save_outputs: true # tự lưu kết quả vào output_dir khi xong hoặc lỗi
+    output_dir: ./outputs
   retrieval:
     query_mode: rewrite # none | rewrite | hyde
   query_rewrite:

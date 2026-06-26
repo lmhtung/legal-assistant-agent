@@ -37,15 +37,24 @@ embeddings:
   model: bge-m3
 
 legal_assistant:
+  chat:
+    streaming: true
+    token_streaming: true
   competition:
     enabled: false
+    max_concurrency: 4
+    save_outputs: true
+    output_dir: ./outputs
   postgres:
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
 ```
 
+`legal_assistant.chat.streaming=true` làm UI gọi `/chat/stream`; nếu đặt `false` UI sẽ gọi `/chat` thường. `token_streaming=true` cho phép node trả lời của LangGraph stream token LLM trực tiếp vào bubble chat qua SSE.
+
 `legal_assistant.competition.enabled=true` dùng khi chạy tập test: agent bỏ qua
-bước Intent và đi thẳng vào legal RAG. UI cũng có nút `Competition` để bật tạm
-thời mà không cần sửa YAML.
+bước Intent và đi thẳng vào legal RAG. `max_concurrency` giới hạn số câu chạy
+song song; mặc định là 4. UI cũng có nút `Competition` để bật tạm thời mà không
+cần sửa YAML.
 
 Sau khi sửa YAML, restart service liên quan.
 
@@ -138,12 +147,25 @@ Input tập test là JSON array trực tiếp:
 Endpoint backend:
 
 ```text
-POST /api/v1/legal/competition
+POST /api/v1/legal/competition          # trả JSON cuối
+POST /api/v1/legal/competition/stream   # stream tiến độ từng câu cho UI
 ```
 
 Response là array submit tối giản gồm `id`, `question`, `answer`,
-`relevant_docs`, `relevant_articles`. Trong UI, bật nút `Competition`, chọn file
-`.json`, kết quả sẽ hiện trong đoạn chat hiện tại.
+`relevant_docs`, `relevant_articles`. Nếu `save_outputs=true`, backend tự lưu kết quả vào `backend/outputs/competition_<timestamp>_<status>.json` khi hoàn tất hoặc khi lỗi. Trong UI, bật nút `Competition`, chọn file
+`.json`, UI gọi endpoint stream nên luồng xử lý từng câu sẽ hiện trong đoạn chat hiện tại.
+
+Chạy ngầm trong tmux không cần mở UI:
+
+```bash
+cd backend
+uv run python scripts/run_competition.py --file path/to/test.json
+```
+
+Script sẽ tự khởi tạo retrieval index, chạy tối đa `max_concurrency` câu cùng lúc,
+ghi `competition_<run_id>_running.json` sau mỗi câu và luôn append
+`backend/outputs/report.log`. Khi kết thúc hoặc bị dừng/lỗi, script ghi thêm file
+`competition_<run_id>_success.json` hoặc `competition_<run_id>_error.json`.
 
 ## Dataset và index
 

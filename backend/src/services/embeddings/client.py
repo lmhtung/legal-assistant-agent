@@ -22,8 +22,6 @@ class EmbeddingsClient:
             model=settings.embeddings.model,
             base_url=settings.embeddings.base_url,
             api_key=settings.embeddings.api_key,
-            tiktoken_enabled=False,  # vLLM expects raw text, not pre-tokenized OpenAI token IDs
-            check_embedding_ctx_length=False,
         )
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:

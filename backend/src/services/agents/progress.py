@@ -21,6 +21,12 @@ def reset_progress_callback(token: Token) -> None:
     _progress_callback.reset(token)
 
 
+def has_progress_callback() -> bool:
+    """Cho biết request hiện tại có đang mở kênh progress/SSE hay không."""
+
+    return _progress_callback.get() is not None
+
+
 async def emit_progress(
     stage: str,
     status: str,
@@ -45,4 +51,16 @@ async def emit_progress(
             "metadata": metadata or {},
         }
     )
+    await asyncio.sleep(0)
+
+
+async def emit_token(token: str, *, stage: str = "answer") -> None:
+    """Phát token LLM cho request streaming hiện tại."""
+
+    if not token:
+        return
+    callback = _progress_callback.get()
+    if callback is None:
+        return
+    await callback({"event": "token", "stage": stage, "token": token})
     await asyncio.sleep(0)

@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, FileUp, MessageSquarePlus, PanelLeft, Search, Send, SquarePen, Trash2 } from "lucide-react";
 import { parseSseChunk } from "@/lib/sse";
-import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, CompetitionRecord, Conversation } from "@/lib/types";
+import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, CompetitionRecord, CompetitionStreamEvent, Conversation, RuntimeConfig } from "@/lib/types";
 
 const API_BASE = "/backend-api";
 const DEFAULT_DATABASE = process.env.NEXT_PUBLIC_DEFAULT_DATABASE || "default";
@@ -36,6 +36,10 @@ const STAGE_TITLES: Record<string, string> = {
   format: "Định dạng và memory",
   result: "Kết quả",
   response: "Hoàn thiện response",
+  competition: "Competition",
+  competition_item: "Câu hỏi",
+  competition_item_result: "Kết quả câu",
+  competition_result: "Kết quả batch",
 };
 
 function formatElapsed(value?: number | null) {
@@ -98,6 +102,7 @@ export default function Home() {
   const [activeId, setActiveId] = useState("");
   const [input, setInput] = useState("");
   const [showStream, setShowStream] = useState(true);
+  const [chatStreaming, setChatStreaming] = useState(true);
   const [competitionMode, setCompetitionMode] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -120,6 +125,17 @@ export default function Home() {
     const initial = [createConversation()];
     setConversations(initial);
     setActiveId(initial[0].id);
+
+    fetch(`${API_BASE}/api/v1/legal/config`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((config: RuntimeConfig | null) => {
+        if (!config) return;
+        setChatStreaming(config.chat_streaming);
+        setCompetitionMode(config.competition_enabled);
+      })
+      .catch(() => {
+        setChatStreaming(true);
+      });
   }, []);
 
   useEffect(() => {
@@ -184,6 +200,16 @@ export default function Home() {
       }));
       return;
     }
+    if (event.event === "token") {
+      updateAssistant(conversationId, assistantId, (message) => ({
+        ...message,
+        content:
+          message.content === "Đang tạo câu trả lời..."
+            ? event.data.token
+            : message.content + event.data.token,
+      }));
+      return;
+    }
     if (event.event === "error") {
       updateAssistant(conversationId, assistantId, (message) => ({
         ...message,
@@ -228,12 +254,13 @@ export default function Home() {
     const text = question.trim();
     const userMessage: ChatMessage = { id: createId(), role: "user", content: text, stream: [], trace: [], sources: [] };
     const assistantId = createId();
+    const chatEndpoint = chatStreaming ? `${API_BASE}/api/v1/legal/chat/stream` : `${API_BASE}/api/v1/legal/chat`;
     const assistantMessage: ChatMessage = {
       id: assistantId,
       role: "assistant",
       content: "Đang tạo câu trả lời...",
       stream: [],
-      trace: [{ stage: "client", status: "completed", title: "Gửi request", detail: `POST ${API_BASE}/api/v1/legal/chat/stream`, tone: "success" }],
+      trace: [{ stage: "client", status: "completed", title: "Gửi request", detail: `POST ${chatEndpoint}`, tone: "success" }],
       sources: [],
     };
 
@@ -248,19 +275,41 @@ export default function Home() {
     setIsSending(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/v1/legal/chat/stream`, {
+      const body = JSON.stringify({
+        session_id: conversationId,
+        message: text,
+        databases: [DEFAULT_DATABASE],
+        top_k: 8,
+        competition_mode: competitionMode,
+      });
+      const response = await fetch(chatEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: conversationId,
-          message: text,
-          databases: [DEFAULT_DATABASE],
-          top_k: 8,
-          competition_mode: competitionMode,
-        }),
+        body,
       });
-      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
+      if (!chatStreaming) {
+        const data = (await response.json()) as ChatResponse;
+        updateAssistant(conversationId, assistantId, (message) => ({
+          ...message,
+          content: data.answer.answer || "Không có câu trả lời.",
+          sources: data.answer.relevant_articles || [],
+          trace: [
+            ...message.trace,
+            {
+              stage: "result",
+              status: "completed",
+              title: "Kết quả",
+              detail: `Nhận ${data.answer.relevant_articles?.length || 0} điều luật và ${data.answer.relevant_docs?.length || 0} văn bản nguồn.`,
+              tone: "success",
+            },
+          ],
+        }));
+        return;
+      }
+
+      if (!response.body) throw new Error("Không có stream body");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -353,28 +402,78 @@ export default function Home() {
       }));
       setActiveId(conversationId);
 
-      const response = await fetch(`${API_BASE}/api/v1/legal/competition`, {
+      const response = await fetch(`${API_BASE}/api/v1/legal/competition/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(items),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const results = (await response.json()) as CompetitionRecord[];
-      updateAssistant(conversationId, assistantId, (message) => ({
-        ...message,
-        content: `Hoàn tất ${results.length} câu hỏi.\n\n${JSON.stringify(results, null, 2)}`,
-        sources: Array.from(new Set(results.flatMap((item) => item.relevant_articles || []))).slice(0, 8),
-        trace: [
-          ...message.trace,
-          {
-            stage: "result",
-            status: "completed",
-            title: "Kết quả competition",
-            detail: `Nhận ${results.length} record submit.`,
-            tone: "success",
-          },
-        ],
-      }));
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+
+      const results: CompetitionRecord[] = [];
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+        for (const chunk of chunks) {
+          const event = parseSseChunk<CompetitionStreamEvent>(chunk);
+          if (!event) continue;
+          if (event.event === "status" || event.event === "done") {
+            updateAssistant(conversationId, assistantId, (message) => ({
+              ...message,
+              content: event.data.stage === "competition" && event.data.status === "completed"
+                ? `Hoàn tất ${results.length} câu hỏi.${event.data.metadata?.output_path ? `\nĐã lưu: ${event.data.metadata.output_path}` : ""}\n\n${JSON.stringify(results, null, 2)}`
+                : event.data.message,
+              trace: upsertProgress(message.trace, event.data),
+            }));
+          } else if (event.event === "competition_item_result") {
+            const { index, total, ...record } = event.data;
+            results.push(record);
+            updateAssistant(conversationId, assistantId, (message) => ({
+              ...message,
+              content: `Đã hoàn tất ${index}/${total} câu hỏi...`,
+              sources: Array.from(new Set(results.flatMap((item) => item.relevant_articles || []))).slice(0, 8),
+              trace: [
+                ...message.trace,
+                {
+                  stage: "competition_item_result",
+                  status: "completed",
+                  title: `Kết quả câu ${index}`,
+                  detail: `${record.relevant_articles?.length || 0} điều luật · id: ${record.id ?? "không có"}`,
+                  tone: "success",
+                },
+              ],
+            }));
+          } else if (event.event === "competition_result") {
+            results.splice(0, results.length, ...event.data);
+            updateAssistant(conversationId, assistantId, (message) => ({
+              ...message,
+              content: `Hoàn tất ${results.length} câu hỏi.\n\n${JSON.stringify(results, null, 2)}`,
+              sources: Array.from(new Set(results.flatMap((item) => item.relevant_articles || []))).slice(0, 8),
+              trace: [
+                ...message.trace,
+                {
+                  stage: "competition_result",
+                  status: "completed",
+                  title: "Kết quả competition",
+                  detail: `Nhận ${results.length} record submit.`,
+                  tone: "success",
+                },
+              ],
+            }));
+          } else if (event.event === "error") {
+            updateAssistant(conversationId, assistantId, (message) => ({
+              ...message,
+              content: event.data.message,
+              trace: upsertProgress(message.trace, event.data),
+            }));
+          }
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Không xử lý được file competition.";
       patchConversation(conversationId, (conversation) => {

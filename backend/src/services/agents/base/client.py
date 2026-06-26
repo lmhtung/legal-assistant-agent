@@ -55,6 +55,21 @@ class BaseAgent(ABC, Generic[RequestT, ResponseT, StateT]):
             return await self.graph.ainvoke(state, config=config)
         return await self.run_without_graph(state)
 
+    async def stream_graph(self, state: StateT, config: dict[str, Any] | None = None) -> StateT:
+        """Chạy LangGraph bằng astream để endpoint SSE nhận update khi graph đang chạy."""
+
+        if self.graph is None or not hasattr(self.graph, "astream"):
+            return await self.run_without_graph(state)
+
+        final_state: StateT = state
+        async for chunk in self.graph.astream(state, config=config, stream_mode="updates"):
+            if not isinstance(chunk, dict):
+                continue
+            for node_update in chunk.values():
+                if isinstance(node_update, dict):
+                    final_state = {**final_state, **node_update}
+        return final_state
+
     @abstractmethod
     def build_initial_state(self, request: RequestT) -> StateT:
         """Chuyển request API thành state nội bộ cho graph."""

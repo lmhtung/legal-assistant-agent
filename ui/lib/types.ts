@@ -1,3 +1,9 @@
+export type RuntimeConfig = {
+  chat_streaming: boolean;
+  token_streaming: boolean;
+  competition_enabled: boolean;
+};
+
 export type LegalArticle = {
   id: string;
   article_id: string;
@@ -52,7 +58,15 @@ export type ChatStreamProgress = {
 
 export type ChatStreamEvent =
   | { event: "status"; data: ChatStreamProgress }
+  | { event: "token"; data: { token: string; stage?: string } }
   | { event: "result"; data: ChatResponse }
+  | { event: "done"; data: ChatStreamProgress }
+  | { event: "error"; data: ChatStreamProgress };
+
+export type CompetitionStreamEvent =
+  | { event: "status"; data: ChatStreamProgress }
+  | { event: "competition_item_result"; data: CompetitionRecord & { index: number; total: number } }
+  | { event: "competition_result"; data: CompetitionRecord[] }
   | { event: "done"; data: ChatStreamProgress }
   | { event: "error"; data: ChatStreamProgress };
 

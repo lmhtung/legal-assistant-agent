@@ -83,7 +83,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                 metadata={"enabled": self.settings.short_memory.enabled, "session_id": request.session_id},
             )
             state = self.build_initial_state(request)
-            state = await self.run_graph(state, self.build_graph_config(request))
+            state = await self.stream_graph(state, self.build_graph_config(request))
             return self.build_response(state, request)
         finally:
             reset_progress_callback(token)

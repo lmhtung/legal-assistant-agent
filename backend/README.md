@@ -35,19 +35,41 @@ Trong `config.yaml`:
 
 ```yaml
 legal_assistant:
+  chat:
+    streaming: true
+    token_streaming: true
   competition:
     enabled: false
+    max_concurrency: 4
+    save_outputs: true
+    output_dir: ./outputs
 ```
 
-Khi bật `true`, agent bỏ qua Intent và luôn chạy legal RAG. Endpoint nhận trực
+`chat.streaming=true` là mode mặc định cho UI/chat client. Khi tắt, UI dùng
+endpoint `/api/v1/legal/chat` thay vì `/api/v1/legal/chat/stream`.
+`chat.token_streaming=true` cho phép node trả lời stream token-by-token qua SSE,
+nên người dùng thấy câu trả lời xuất hiện ngay trong bubble chat.
+
+Khi bật `true`, agent bỏ qua Intent và luôn chạy legal RAG. `max_concurrency` giới hạn số câu chạy song song; mặc định là 4. Endpoint nhận trực
 tiếp JSON array tập test:
 
 ```text
-POST /api/v1/legal/competition
+POST /api/v1/legal/competition          # trả JSON cuối
+POST /api/v1/legal/competition/stream   # stream tiến độ từng câu cho UI
 ```
 
 Response trả array tối giản theo format submit: `id`, `question`, `answer`,
-`relevant_docs`, `relevant_articles`.
+`relevant_docs`, `relevant_articles`. Nếu `save_outputs=true`, backend tự lưu kết quả vào `backend/outputs/competition_<timestamp>_<status>.json` khi hoàn tất hoặc khi lỗi.
+
+Chạy không cần UI, phù hợp tmux:
+
+```bash
+uv run python scripts/run_competition.py --file path/to/test.json
+```
+
+Script ghi `competition_<run_id>_running.json` sau mỗi câu, và luôn ghi
+`outputs/report.log`. Khi kết thúc/lỗi/dừng giữa chừng, script ghi file final
+`competition_<run_id>_success.json` hoặc `competition_<run_id>_error.json`.
 
 ## Auto index
 

@@ -26,7 +26,7 @@ from src.services.agents.legal_assistant.prompt import (
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
 from src.services.agents.legal_assistant.tools import search_legal_articles
-from src.services.agents.progress import emit_progress
+from src.services.agents.progress import emit_progress, emit_token, has_progress_callback
 
 
 async def analyze_intent_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
@@ -389,6 +389,10 @@ async def _chat_answer(runtime: Any, state: LegalAssistantState, articles: list[
     if runtime.llm is None:
         return _fallback_answer(state["question"], articles)
     try:
+        if runtime.settings.legal_assistant.chat.token_streaming and has_progress_callback():
+            streamed = await _stream_chat_answer(runtime, messages)
+            if streamed:
+                return streamed
         if isinstance(messages, str):
             return await runtime.llm.ainvoke(messages)
         if hasattr(runtime.llm, "ainvoke_messages"):
@@ -397,6 +401,28 @@ async def _chat_answer(runtime: Any, state: LegalAssistantState, articles: list[
     except Exception as exc:
         state.setdefault("debug", {})["llm_error"] = str(exc)
         return _fallback_answer(state["question"], articles)
+
+
+async def _stream_chat_answer(runtime: Any, messages: list[Any] | str) -> str:
+    """Stream token trong node LangGraph answer và gom lại full answer."""
+
+    chunks: list[str] = []
+    if isinstance(messages, str):
+        if not hasattr(runtime.llm, "astream"):
+            return ""
+        async for token in runtime.llm.astream(messages):
+            chunks.append(token)
+            await emit_token(token)
+    else:
+        if hasattr(runtime.llm, "astream_messages"):
+            async for token in runtime.llm.astream_messages(messages):
+                chunks.append(token)
+                await emit_token(token)
+        elif hasattr(runtime.llm, "astream"):
+            async for token in runtime.llm.astream(_messages_to_prompt(messages)):
+                chunks.append(token)
+                await emit_token(token)
+    return "".join(chunks).strip()
 
 
 def _build_llm_messages(state: LegalAssistantState, articles: list[LegalArticle] | None) -> list[Any] | str:
