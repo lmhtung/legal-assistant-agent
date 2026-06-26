@@ -35,6 +35,14 @@ def tokenize(text: str, mode: str = "auto") -> list[str]:
     return [token.lower() for token in _TOKEN_RE.findall(normalized)]
 
 
+def tokenizer_signature(mode: str = "auto") -> str:
+    """Tên tokenizer thực tế để đưa vào manifest cache BM25."""
+
+    if mode in {"auto", "underthesea"} and text_normalize and word_tokenize:
+        return "underthesea"
+    return "regex"
+
+
 class InMemoryLegalStore:
     """BM25 store chạy trong RAM cho từng category pháp luật.
 
@@ -69,6 +77,38 @@ class InMemoryLegalStore:
             self._articles[indexed.article_id] = indexed
         self._rebuild_index()
 
+    @classmethod
+    def from_indexed_articles(
+        cls,
+        database: str,
+        articles: list[LegalArticle],
+        tokenized_corpus: list[list[str]],
+        tokenizer: str = "auto",
+        k1: float = 2.0,
+        b: float = 1.0,
+        epsilon: float = 0.5,
+    ) -> "InMemoryLegalStore":
+        """Tạo BM25 store từ corpus đã tokenize sẵn.
+
+        Cache này tránh phải chạy lại tokenizer tiếng Việt ở mỗi lần startup.
+        Model BM25 vẫn được dựng từ token có sẵn để object runtime luôn sạch.
+        """
+
+        store = cls(database=database, tokenizer=tokenizer, k1=k1, b=b, epsilon=epsilon)
+        store._articles = {
+            article.article_id: article.model_copy(update={"category": article.category or database})
+            for article in articles
+        }
+        store._article_ids = [article.article_id for article in articles]
+        store._tokenized_corpus = tokenized_corpus
+        store._build_bm25_model()
+        return store
+
+    def export_tokenized_corpus(self) -> list[list[str]]:
+        """Trả corpus đã tokenize để persist xuống cache BM25."""
+
+        return self._tokenized_corpus
+
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
         """Search BM25 theo toàn bộ query variants và trả top_k candidate."""
 
@@ -101,6 +141,11 @@ class InMemoryLegalStore:
 
         self._article_ids = list(self._articles)
         self._tokenized_corpus = [tokenize(index_text(self._articles[article_id]), self.tokenizer) for article_id in self._article_ids]
+        self._build_bm25_model()
+
+    def _build_bm25_model(self) -> None:
+        """Dựng BM25Okapi từ corpus token hiện có."""
+
         if BM25Okapi is not None:
             self._bm25 = BM25Okapi(
                 self._tokenized_corpus if self._tokenized_corpus else [[]],

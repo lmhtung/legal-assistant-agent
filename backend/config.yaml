@@ -8,8 +8,8 @@ ui:
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8017/v1
-  default_model: qwen35-9b
+  base_url: http://localhost:8009/v1
+  default_model: qwen3-4b-fp8
   temperature: 1.0
 
 embeddings:

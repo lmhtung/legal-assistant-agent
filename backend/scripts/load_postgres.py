@@ -125,9 +125,10 @@ async def import_records(args: argparse.Namespace) -> None:
     finally:
         await conn.close()
 
-    manifest = get_settings().legal_assistant.vector_store.persist_directory / "legal_index_manifest.json"
-    manifest.unlink(missing_ok=True)
-    print("Đã invalid Chroma manifest; backend sẽ rebuild vector index ở lần khởi động tiếp theo")
+    persist_directory = get_settings().legal_assistant.vector_store.persist_directory
+    for filename in ("legal_index_manifest.json", "legal_bm25_cache.json"):
+        (persist_directory / filename).unlink(missing_ok=True)
+    print("Đã invalid Chroma/BM25 cache; backend sẽ rebuild index ở lần khởi động tiếp theo")
 
 
 if __name__ == "__main__":

@@ -37,11 +37,14 @@ Khi startup, backend:
 2. nhóm record theo category;
 3. embed `law_name + "\n" + article_title + "\n" + content`;
 4. build/reuse Chroma;
-5. nạp BM25 nếu mode là `bm25` hoặc `hybrid`;
-6. mở FastAPI sau khi retrieval stores sẵn sàng.
+5. nạp BM25 từ cache nếu mode là `bm25` hoặc `hybrid`;
+6. nếu cache BM25 chưa có hoặc lệch config/data thì tokenize và ghi cache một lần;
+7. mở FastAPI sau khi retrieval stores sẵn sàng.
 
 Chroma được rebuild khi manifest, nguồn PostgreSQL, số record hoặc embedding
-model thay đổi.
+model thay đổi. BM25 dùng `legal_bm25_cache.json` trong `chroma_db`, nên không
+chạy lại tokenizer tiếng Việt ở mỗi lần backend restart. Cache BM25 chỉ rebuild
+khi dataset/PostgreSQL source, tokenizer hoặc tham số BM25 thay đổi.
 
 ## Docker
 

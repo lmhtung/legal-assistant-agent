@@ -15,10 +15,11 @@ from src.services.embeddings.client import get_embeddings_client
 from src.services.vector_store.base import VectorStoreRegistry, vector_store_registry
 from src.services.vector_store.chroma import ChromaLegalStore, safe_collection_name
 from src.services.vector_store.hybrid import HybridLegalStore
-from src.services.vector_store.in_memory import InMemoryLegalStore
+from src.services.vector_store.in_memory import InMemoryLegalStore, tokenizer_signature
 
 logger = logging.getLogger("uvicorn.error")
 _MANIFEST_NAME = "legal_index_manifest.json"
+_BM25_CACHE_NAME = "legal_bm25_cache.json"
 _LOCK_NAME = ".legal_index.lock"
 
 
@@ -32,11 +33,12 @@ async def initialize_legal_index(
     settings: Settings,
     registry: VectorStoreRegistry = vector_store_registry,
 ) -> None:
-    """Đồng bộ PostgreSQL -> Chroma một lần và nạp BM25 cho process hiện tại.
+    """Đồng bộ PostgreSQL -> Chroma/BM25 cache rồi đăng ký runtime stores.
 
-    Chroma chỉ được rebuild khi chưa có manifest, collection không đủ record,
-    nguồn PostgreSQL thay đổi hoặc embedding endpoint/model thay đổi. BM25 luôn
-    được nạp lại vì index này chỉ tồn tại trong RAM của backend process.
+    Chroma và BM25 đều có manifest riêng trong ``persist_directory``. Backend chỉ
+    build lại khi nguồn PostgreSQL, embedding config hoặc cấu hình BM25 liên quan
+    thay đổi. Khi manifest hợp lệ, BM25 được nạp từ corpus đã tokenize sẵn để
+    tránh chạy tokenizer tiếng Việt ở mỗi lần startup.
     """
 
     postgres = settings.legal_assistant.postgres
@@ -63,26 +65,29 @@ async def initialize_legal_index(
             len(articles_by_category),
         )
         expected_manifest = _manifest(settings, articles_by_category)
-        manifest_path = persist_directory / _MANIFEST_NAME
-        current_manifest = _read_manifest(manifest_path)
-
-        rebuild = current_manifest != expected_manifest or not _collections_are_complete(
-            settings,
-            expected_manifest["categories"],
-        )
-        if rebuild:
-            logger.info("[index] Chroma chưa hợp lệ, bắt đầu embedding và rebuild")
-            _rebuild_chroma(settings, articles_by_category)
-            manifest_path.write_text(
-                json.dumps(expected_manifest, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+        vector = settings.legal_assistant.vector_store
+        if vector.mode in {"chroma", "hybrid"}:
+            manifest_path = persist_directory / _MANIFEST_NAME
+            current_manifest = _read_manifest(manifest_path)
+            rebuild = current_manifest != expected_manifest or not _collections_are_complete(
+                settings,
+                expected_manifest["categories"],
             )
-            logger.info("Đã build Chroma: %s records", expected_manifest["total_records"])
+            if rebuild:
+                logger.info("[index] Chroma chưa hợp lệ, bắt đầu embedding và rebuild")
+                _rebuild_chroma(settings, articles_by_category)
+                manifest_path.write_text(
+                    json.dumps(expected_manifest, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info("Đã build Chroma: %s records", expected_manifest["total_records"])
+            else:
+                logger.info("Chroma index hợp lệ, bỏ qua embedding lại")
         else:
-            logger.info("Chroma index hợp lệ, bỏ qua embedding lại")
+            logger.info("[index] mode=bm25, bỏ qua Chroma/embedding")
 
-        logger.info("[index] Bắt đầu nạp BM25/runtime stores")
-        _register_runtime_stores(settings, registry, articles_by_category)
+        logger.info("[index] Bắt đầu đăng ký runtime stores")
+        _register_runtime_stores(settings, registry, articles_by_category, expected_manifest)
         logger.info("[index] Hoàn tất chuẩn bị retrieval index")
 
 
@@ -270,42 +275,160 @@ def _register_runtime_stores(
     settings: Settings,
     registry: VectorStoreRegistry,
     grouped: dict[str, list[LegalArticle]],
+    index_manifest: dict[str, Any],
 ) -> None:
-    """Đăng ký Chroma và nạp BM25 để hybrid search dùng được ngay."""
+    """Đăng ký Chroma/BM25 store cho từng category trong process hiện tại."""
 
     vector = settings.legal_assistant.vector_store
-    embeddings = get_embeddings_client()
+    chroma_required = vector.mode in {"chroma", "hybrid"}
+    bm25_required = vector.mode in {"bm25", "hybrid"}
+    embeddings = get_embeddings_client() if chroma_required else None
+    bm25_stores = _load_or_build_bm25_stores(settings, grouped, index_manifest) if bm25_required else {}
+
     total_categories = len(grouped)
     for category_index, (category, articles) in enumerate(grouped.items(), start=1):
         logger.info(
-            "[index][Runtime %s/%s] %s: nạp %s record",
+            "[index][Runtime %s/%s] %s: đăng ký %s record",
             category_index,
             total_categories,
             category,
             len(articles),
         )
-        chroma_store = ChromaLegalStore(
-            database=category,
-            persist_directory=str(vector.persist_directory),
-            collection_prefix=vector.default_collection,
-            embeddings=embeddings,
-        )
+        chroma_store = None
+        if chroma_required:
+            chroma_store = ChromaLegalStore(
+                database=category,
+                persist_directory=str(vector.persist_directory),
+                collection_prefix=vector.default_collection,
+                embeddings=embeddings,
+            )
         if vector.mode == "chroma":
+            assert chroma_store is not None
             registry.register(category, chroma_store)
             continue
 
-        lexical_store = InMemoryLegalStore(
+        lexical_store = bm25_stores[category]
+        if vector.mode == "bm25":
+            registry.register(category, lexical_store)
+        else:
+            assert chroma_store is not None
+            registry.register(
+                category,
+                HybridLegalStore(lexical_store, chroma_store, rrf_k=vector.rrf_k),
+            )
+
+
+def _load_or_build_bm25_stores(
+    settings: Settings,
+    grouped: dict[str, list[LegalArticle]],
+    index_manifest: dict[str, Any],
+) -> dict[str, InMemoryLegalStore]:
+    """Nạp BM25 từ cache; nếu cache lệch manifest thì tokenize và ghi lại."""
+
+    vector = settings.legal_assistant.vector_store
+    cache_path = vector.persist_directory / _BM25_CACHE_NAME
+    expected_manifest = _bm25_manifest(settings, index_manifest)
+    cached = _read_manifest(cache_path)
+    if cached and cached.get("manifest") == expected_manifest:
+        stores = _bm25_stores_from_cache(settings, grouped, cached)
+        if stores is not None:
+            logger.info("[index] BM25 cache hợp lệ, nạp từ %s", cache_path)
+            return stores
+        logger.warning("[index] BM25 cache lỗi cấu trúc, sẽ build lại")
+
+    logger.info("[index] BM25 cache chưa hợp lệ, bắt đầu tokenize/build một lần")
+    stores = _build_bm25_stores(settings, grouped)
+    cache = {
+        "manifest": expected_manifest,
+        "categories": {
+            category: {
+                "article_ids": [article.article_id for article in grouped[category]],
+                "tokenized_corpus": store.export_tokenized_corpus(),
+            }
+            for category, store in stores.items()
+        },
+    }
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    logger.info("[index] Đã ghi BM25 cache: %s", cache_path)
+    return stores
+
+
+def _build_bm25_stores(
+    settings: Settings,
+    grouped: dict[str, list[LegalArticle]],
+) -> dict[str, InMemoryLegalStore]:
+    """Tokenize records và dựng BM25 store theo từng category."""
+
+    vector = settings.legal_assistant.vector_store
+    stores: dict[str, InMemoryLegalStore] = {}
+    total_categories = len(grouped)
+    for category_index, (category, articles) in enumerate(grouped.items(), start=1):
+        logger.info(
+            "[index][BM25 %s/%s] %s: tokenize %s record",
+            category_index,
+            total_categories,
+            category,
+            len(articles),
+        )
+        store = InMemoryLegalStore(
             database=category,
             tokenizer=vector.bm25_tokenizer,
             k1=vector.bm25_k1,
             b=vector.bm25_b,
             epsilon=vector.bm25_epsilon,
         )
-        lexical_store.add_articles(articles)
-        if vector.mode == "bm25":
-            registry.register(category, lexical_store)
-        else:
-            registry.register(
-                category,
-                HybridLegalStore(lexical_store, chroma_store, rrf_k=vector.rrf_k),
-            )
+        store.add_articles(articles)
+        stores[category] = store
+    return stores
+
+
+def _bm25_stores_from_cache(
+    settings: Settings,
+    grouped: dict[str, list[LegalArticle]],
+    cache: dict[str, Any],
+) -> dict[str, InMemoryLegalStore] | None:
+    """Khôi phục BM25 store từ tokenized corpus đã lưu."""
+
+    vector = settings.legal_assistant.vector_store
+    categories = cache.get("categories")
+    if not isinstance(categories, dict):
+        return None
+
+    stores: dict[str, InMemoryLegalStore] = {}
+    for category, articles in grouped.items():
+        payload = categories.get(category)
+        if not isinstance(payload, dict):
+            return None
+        article_ids = payload.get("article_ids")
+        tokenized_corpus = payload.get("tokenized_corpus")
+        if article_ids != [article.article_id for article in articles]:
+            return None
+        if not isinstance(tokenized_corpus, list) or len(tokenized_corpus) != len(articles):
+            return None
+        stores[category] = InMemoryLegalStore.from_indexed_articles(
+            database=category,
+            articles=articles,
+            tokenized_corpus=tokenized_corpus,
+            tokenizer=vector.bm25_tokenizer,
+            k1=vector.bm25_k1,
+            b=vector.bm25_b,
+            epsilon=vector.bm25_epsilon,
+        )
+    return stores
+
+
+def _bm25_manifest(settings: Settings, index_manifest: dict[str, Any]) -> dict[str, Any]:
+    """Manifest riêng cho BM25 để không phụ thuộc vào manifest Chroma."""
+
+    vector = settings.legal_assistant.vector_store
+    return {
+        "version": 1,
+        "source_index": index_manifest,
+        "bm25": {
+            "tokenizer": vector.bm25_tokenizer,
+            "tokenizer_impl": tokenizer_signature(vector.bm25_tokenizer),
+            "k1": vector.bm25_k1,
+            "b": vector.bm25_b,
+            "epsilon": vector.bm25_epsilon,
+        },
+    }
