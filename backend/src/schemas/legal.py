@@ -70,15 +70,12 @@ class LegalArticle(BaseModel):
     @computed_field
     @property
     def vector_text(self) -> str:
-        """Text chuẩn được embed vào vector database."""
+        """Text chuẩn dùng chung khi build Chroma và index BM25."""
 
-        title_line = " ".join(item for item in [self.article, self.article_title] if item)
         return "\n".join(
-            [
-                f"{self.doc_type} {self.law_id} {self.law_name}".strip(),
-                title_line.strip(),
-                self.content.strip(),
-            ]
+            item.strip()
+            for item in [self.law_name, self.article_title or "", self.content]
+            if item and item.strip()
         ).strip()
 
 

@@ -27,9 +27,14 @@ class ChatResponse(BaseModel):
 
 
 class ChatStreamMessagePayload(BaseModel):
-    """Payload text ngắn cho event trạng thái, done hoặc error."""
+    """Payload tiến độ có cấu trúc để UI biết request đang dừng ở đâu."""
 
     message: str
+    stage: str = "request"
+    status: Literal["started", "running", "completed", "warning", "error"] = "running"
+    elapsed_ms: int | None = None
+    detail: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatStreamStatusEvent(BaseModel):

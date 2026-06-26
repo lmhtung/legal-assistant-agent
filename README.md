@@ -1,17 +1,134 @@
-# Legal Assistant Agent
+# MscAI Legal Assistant
 
-Backend này là **agent runtime** cho trợ lý pháp lý tiếng Việt. Phần database/vector database được tách sang MCP server và hệ thống data bên ngoài. Backend không import data, không sửa data và không expose API quản lý dataset.
-
-Luồng chính:
+`backend/config.yaml` là nguồn cấu hình duy nhất cho ứng dụng:
 
 ```text
-Backend Agent -> MCP Retrieval Tools -> Vector DB / PostgreSQL
+config.yaml
+├── app: FastAPI host/port
+├── ui: Next.js host/port
+├── llm: endpoint/model
+├── embeddings: endpoint/model
+├── short_memory
+└── legal_assistant: PostgreSQL/retrieval/vector store
 ```
 
-Backend vẫn giữ tool local làm fallback/dev. Khi cần thêm tool mới, ưu tiên viết trong plugin MCP `servers/legal`, không cần nhét thêm logic data vào agent.
+Không còn dùng `.env`, `.env.local`, `NEXT_PUBLIC_API_BASE_URL` hoặc biến môi
+trường để ghi đè cấu hình runtime.
 
-Tài liệu backend: [backend/README.md](backend/README.md)
+## Cấu hình
 
-Tài liệu MCP retrieval: [mcp/README.md](mcp/README.md)
+Chỉ sửa [backend/config.yaml](backend/config.yaml). Ví dụ:
 
-Tài liệu cấu trúc data: [backend/docs/data-structure.md](backend/docs/data-structure.md)
+```yaml
+app:
+  host: 0.0.0.0
+  port: 8025
+
+ui:
+  host: 0.0.0.0
+  port: 5173
+
+llm:
+  base_url: http://localhost:8017/v1
+  default_model: qwen35-9b
+
+embeddings:
+  base_url: http://localhost:8013/v1
+  model: bge-m3
+
+legal_assistant:
+  postgres:
+    database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
+```
+
+Sau khi sửa YAML, restart service liên quan.
+
+## Chạy bằng Docker
+
+Dùng wrapper để Compose nhận PostgreSQL/UI port từ YAML:
+
+```bash
+./compose.sh build backend ui
+./compose.sh up -d postgres
+```
+
+Nạp dataset:
+
+```bash
+./compose.sh run --rm backend python scripts/load_postgres.py --truncate
+```
+
+Chạy backend và UI:
+
+```bash
+./compose.sh up -d backend ui
+./compose.sh logs -f backend
+```
+
+Với cấu hình hiện tại:
+
+```text
+UI:         http://localhost:5173
+Backend:    http://localhost:8025
+Health:     http://localhost:8025/health
+PostgreSQL: localhost:23432
+```
+
+Dừng project, giữ volume:
+
+```bash
+./compose.sh down
+```
+
+`compose.sh` chỉ đọc YAML rồi gọi Docker Compose. Không tạo một file config thứ
+hai. Docker dùng host network để các URL `localhost` trong YAML giữ nguyên ý
+nghĩa cả khi backend chạy trong container.
+
+## Chạy development trên máy
+
+### 1. PostgreSQL
+
+```bash
+./compose.sh up -d postgres
+```
+
+### 2. Backend
+
+```bash
+cd backend
+uv sync --frozen
+uv run python scripts/load_postgres.py --truncate
+uv run python scripts/run_backend.py --reload
+```
+
+`run_backend.py` tự đọc `app.host` và `app.port`; không truyền port bằng CLI.
+
+### 3. UI
+
+Terminal khác:
+
+```bash
+cd ui
+npm ci
+npm run dev
+```
+
+UI gọi `/backend-api/...`. Next.js proxy đọc `app.port` trực tiếp từ
+`backend/config.yaml`, nên không cần `.env.local`.
+
+## Dataset và index
+
+Dataset mặc định:
+
+```text
+backend/src/categories/crawled_articles_category.json
+```
+
+Luồng:
+
+```text
+JSON -> PostgreSQL -> backend startup -> Chroma + BM25 -> agent
+```
+
+Script import upsert theo `id` và xóa Chroma manifest. Backend sẽ rebuild vector
+index ở lần khởi động kế tiếp. Dataset hiện có 13.969 record thuộc 57 category.

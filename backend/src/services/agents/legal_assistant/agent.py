@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import Awaitable, Callable
 
 try:
     from langchain_core.messages import HumanMessage
@@ -21,6 +22,7 @@ from src.services.agents.legal_assistant.node import (
     retrieve_node,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
+from src.services.agents.progress import emit_progress, reset_progress_callback, set_progress_callback
 from src.services.vector_store import VectorStoreFactory, VectorStoreRegistry, vector_store_registry
 
 
@@ -57,6 +59,28 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             "tool_calls": [],
             "debug": {},
         }
+
+    async def answer_with_progress(
+        self,
+        request: LegalAnswerRequest,
+        callback: Callable[[dict], Awaitable[None]],
+    ) -> LegalAnswerResponse:
+        """Chạy agent và phát tiến độ riêng cho request streaming hiện tại."""
+
+        token = set_progress_callback(callback)
+        try:
+            await emit_progress(
+                "memory",
+                "started",
+                "Đang khôi phục short-memory của đoạn chat",
+                detail="LangGraph dùng session_id làm thread_id.",
+                metadata={"enabled": self.settings.short_memory.enabled, "session_id": request.session_id},
+            )
+            state = self.build_initial_state(request)
+            state = await self.run_graph(state, self.build_graph_config(request))
+            return self.build_response(state, request)
+        finally:
+            reset_progress_callback(token)
 
     def build_response(self, state: LegalAssistantState, request: LegalAnswerRequest) -> LegalAnswerResponse:
         debug = state.get("debug", {}).copy() if request.include_debug else {}

@@ -1,7 +1,7 @@
 """Backend tools dùng bởi legal assistant.
 
-File này chỉ chứa tool chạy trong backend. MCP hiện tại chỉ giữ logic data/database,
-nên tool search ở đây gọi trực tiếp local vector store registry theo category.
+File này chứa tool retrieval chạy trực tiếp trong backend. Tool sử dụng registry
+Chroma/BM25 đã được nạp từ PostgreSQL khi service khởi động.
 """
 from __future__ import annotations
 

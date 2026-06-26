@@ -1,11 +1,15 @@
 app:
   host: 0.0.0.0
-  port: 8000
+  port: 8025
+
+ui:
+  host: 0.0.0.0
+  port: 5173
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8016/v1
-  default_model: qwen3-14b
+  base_url: http://localhost:8017/v1
+  default_model: qwen35-9b
   temperature: 1.0
 
 embeddings:
@@ -25,18 +29,22 @@ legal_assistant:
     use_llm: true
     max_variants: 3
   categories:
-    available: [] # ví dụ: [luat_dau_thau, luat_ho_tro_doanh_nghiep_vua_va_nho]
-    default: [default]
     top_k_when_le_2_categories: 2
     top_k_when_many_categories: 1
     hyde_top_k: 3
+  postgres:
+    enabled: true
+    database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
+    table_name: legal_knowledge_records
+    category_column: category
+    batch_size: 128
   vector_store:
     mode: hybrid # bm25 | chroma | hybrid
     persist_directory: ./chroma_db
     default_collection: legal_articles
     rrf_k: 60
     top_k: 8
-    bm25_tokenizer: auto # auto | underthesea | regex
+    bm25_tokenizer: underthesea # auto | underthesea | regex
     bm25_k1: 2.0
     bm25_b: 1.0
     bm25_epsilon: 0.5

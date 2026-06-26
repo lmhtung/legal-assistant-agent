@@ -1,46 +1,73 @@
 # Project Architecture
 
-Hệ thống được tách thành ba phần:
+Hệ thống gồm ba khối rõ ràng:
 
 ```text
-External Data System -> tự xử lý/tự cập nhật PostgreSQL và vector index
-MCP Server           -> expose tools đọc/search data
-Agent Runtime        -> hỏi đáp, không import hoặc sửa dữ liệu
+PostgreSQL Data Source -> Startup Index Builder -> Chroma + BM25
+                                               -> Legal Agent -> FastAPI/UI
 ```
 
-## External Data System
+## 1. PostgreSQL
 
-Phần data không nằm trong backend agent. Nó tự tạo PostgreSQL/vector DB, tự update dữ liệu và tự đảm bảo metadata đúng contract trong `data-structure.md`.
+PostgreSQL là nguồn dữ liệu luật đã được xử lý sẵn. Backend chỉ đọc dữ liệu,
+không cung cấp API thêm/sửa/xóa dataset và không xử lý PDF/OCR.
 
-## MCP Server
+Mỗi record có `category`; category được dùng để tạo collection Chroma riêng.
 
-MCP là boundary tool cho data. MCP server dùng cấu trúc plugin tối giản: `core` quản lý registry/factory/runner, còn `servers/legal` chứa tools pháp luật. Khi thiếu tool mới, thêm tool ở MCP thay vì thêm logic data vào backend agent.
+## 2. Startup Index Builder
 
-Tools hiện có:
+`src/services/vector_store/index_builder.py` chạy một lần trong FastAPI lifespan:
 
 ```text
-search_legal_articles(query, original_question, query_variants, databases, top_k)
-search_relevant(extra_refs, databases, top_k)
+backend startup
+-> kết nối PostgreSQL
+-> đọc và validate records
+-> nhóm theo category
+-> kiểm tra legal_index_manifest.json
+-> build/reuse Chroma
+-> nạp BM25 vào RAM
+-> bắt đầu nhận request
 ```
 
-`search_relevant` parse `extra` rồi query PostgreSQL bằng exact match theo `doc_type`, `law_id`, `law_name`, `article`. Tool này không dùng embedding.
+Chroma không embedding lại khi manifest và collection count hợp lệ. Rebuild xảy
+ra nếu nguồn PostgreSQL, số record, embedding endpoint/model hoặc format vector
+text thay đổi.
 
-## Agent Service
+## 3. Retrieval Stores
 
-Entry point: `src.main:app`.
+- Chroma: vector index persistent trong `backend/chroma_db`.
+- BM25: lexical index trong RAM, nạp lại mỗi backend process.
+- Hybrid: merge Chroma và BM25 bằng Reciprocal Rank Fusion.
+
+Mỗi category có collection dạng `legal_articles_<category>`.
+
+## 4. Agent Workflow
 
 ```text
-question -> prepare_retrieval_query(none/rewrite/hyde) -> optional MCP search -> answer -> competition output
+question
+-> analyze_intent: SKIP hoặc NEXT
+-> prepare_retrieval_query: none/rewrite/hyde
+-> classify_categories
+-> search_legal_articles trong backend tools.py
+-> hybrid retrieval
+-> grounded answer
+-> competition output
 ```
 
-Nếu `mcp_retrieval.enabled=false`, agent dùng tool local cũ để dev/fallback. Nếu MCP bật nhưng lỗi và `fallback_to_local=true`, agent cũng fallback local.
+- `SKIP`: không retrieval, LLM trả lời hội thoại thông thường.
+- `none`: embedding câu hỏi gốc.
+- `rewrite`: embedding câu hỏi đã viết lại theo ngôn ngữ luật.
+- `hyde`: embedding hypothetical answer do LLM tạo.
 
-## Retrieval Modes
+## 5. Embedding Consistency
 
-`legal_assistant.retrieval.query_mode` hỗ trợ:
+Document build và query search đều dùng singleton `EmbeddingsClient`. Hai phía
+dùng cùng `base_url`, `model` và tokenizer nằm trong embedding server. Manifest
+lưu embedding configuration để không tái sử dụng vector từ model khác.
 
-- `none`: không rewrite, embedding/search bằng câu hỏi gốc.
-- `rewrite`: rewrite câu hỏi thành truy vấn pháp lý rồi embedding/search.
-- `hyde`: sinh hypothetical answer ngắn rồi embedding/search bằng đoạn đó.
+BM25 có tokenizer riêng vì đây là lexical retrieval, không phải vector embedding.
 
-`legal_assistant.query_rewrite.enabled=false` sẽ tắt bước LLM chuẩn bị query và search trực tiếp bằng câu hỏi gốc.
+## 6. Short Memory
+
+LangGraph `InMemorySaver` giữ lịch sử theo `session_id` khi backend đang chạy.
+Memory mất hoàn toàn khi process dừng và không được lưu vào PostgreSQL/Chroma.

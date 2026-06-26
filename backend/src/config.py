@@ -1,11 +1,10 @@
-"""Cấu hình ứng dụng đọc từ ``backend/config.yaml`` và biến môi trường.
+"""Cấu hình ứng dụng chỉ đọc từ ``backend/config.yaml``.
 
 File này là nơi gom toàn bộ cấu hình runtime: FastAPI, LLM, embedding,
 short-memory và fallback vector store local. Các class cấu hình dùng Pydantic để:
 
 - validate kiểu dữ liệu ngay khi app khởi động;
 - có default rõ ràng khi thiếu config;
-- cho phép override bằng biến môi trường dạng ``SECTION__FIELD=value``;
 - tránh truyền dict thô rời rạc khắp codebase.
 """
 from __future__ import annotations
@@ -14,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Tuple, Type
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -44,6 +43,13 @@ class AppSettings(ConfigModel):
 
     host: str = "0.0.0.0"
     port: int = 8000
+
+
+class UISettings(ConfigModel):
+    """Cấu hình Next.js UI khi chạy qua compose wrapper."""
+
+    host: str = "0.0.0.0"
+    port: int = 5173
 
 
 class LLMSettings(ConfigModel):
@@ -93,13 +99,31 @@ class QueryRewriteSettings(ConfigModel):
 
 
 class CategorySettings(ConfigModel):
-    """Cấu hình phân loại category trước retrieval."""
+    """Cấu hình số kết quả retrieval theo category."""
 
-    available: list[str] = Field(default_factory=list)
-    default: list[str] = Field(default_factory=lambda: ["default"])
     top_k_when_le_2_categories: int = 2
     top_k_when_many_categories: int = 1
     hyde_top_k: int = 3
+
+
+class PostgreSQLSettings(ConfigModel):
+    """Nguồn dữ liệu luật dùng để dựng Chroma và nạp BM25 khi startup."""
+
+    enabled: bool = True
+    database_url: str = "postgresql://postgres:postgres@localhost:23432/legal_assistant"
+    table_name: str = "legal_knowledge_records"
+    category_column: str = "category"
+    batch_size: int = Field(default=128, ge=1)
+
+    @field_validator("table_name", "category_column")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        """Chỉ chấp nhận identifier SQL đơn giản từ file cấu hình."""
+
+        parts = value.split(".")
+        if not all(part and part.replace("_", "").isalnum() and not part[0].isdigit() for part in parts):
+            raise ValueError(f"SQL identifier không hợp lệ: {value}")
+        return value
 
 
 class VectorStoreSettings(ConfigModel):
@@ -135,6 +159,7 @@ class LegalAssistantSettings(ConfigModel):
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
     categories: CategorySettings = Field(default_factory=CategorySettings)
+    postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
 
 
@@ -142,6 +167,7 @@ class Settings(BaseSettings):
     """Root settings object được inject vào toàn bộ ứng dụng."""
 
     app: AppSettings = Field(default_factory=AppSettings)
+    ui: UISettings = Field(default_factory=UISettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
     short_memory: ShortMemorySettings = Field(default_factory=ShortMemorySettings)
@@ -152,7 +178,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         yaml_file=CONFIG_FILE,
-        env_nested_delimiter="__",
         extra="ignore",
         populate_by_name=True,
     )
@@ -168,14 +193,12 @@ class Settings(BaseSettings):
     ) -> Tuple[PydanticBaseSettingsSource, ...]:
         """Quy định thứ tự đọc config.
 
-        Thứ tự này cho phép tham số truyền trực tiếp và biến môi trường ghi đè
-        YAML, rất hữu ích khi deploy bằng Docker/Kubernetes.
+        Không đưa env/dotenv vào danh sách nguồn để ``config.yaml`` luôn là
+        nguồn cấu hình runtime duy nhất của backend.
         """
 
         return (
             init_settings,
-            env_settings,
-            dotenv_settings,
             YamlConfigSettingsSource(settings_cls),
             file_secret_settings,
         )

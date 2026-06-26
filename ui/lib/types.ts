@@ -33,15 +33,27 @@ export type ChatResponse = {
   tool_calls: Record<string, unknown>[];
 };
 
+export type ChatStreamProgress = {
+  message: string;
+  stage: string;
+  status: "started" | "running" | "completed" | "warning" | "error";
+  elapsed_ms?: number | null;
+  detail?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type ChatStreamEvent =
-  | { event: "status"; data: { message: string } }
+  | { event: "status"; data: ChatStreamProgress }
   | { event: "result"; data: ChatResponse }
-  | { event: "done"; data: { message: string } }
-  | { event: "error"; data: { message: string } };
+  | { event: "done"; data: ChatStreamProgress }
+  | { event: "error"; data: ChatStreamProgress };
 
 export type AgentTraceStep = {
+  stage?: string;
+  status?: "started" | "running" | "completed" | "warning" | "error";
   title: string;
   detail: string;
+  elapsedMs?: number | null;
   tone?: "info" | "success" | "warning" | "error";
 };
 

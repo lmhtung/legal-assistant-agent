@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from src.config import VectorStoreSettings
-from src.services.embeddings.client import EmbeddingsClient
+from src.services.embeddings.client import EmbeddingsClient, get_embeddings_client
 from src.services.vector_store.base import LegalVectorStore
 from src.services.vector_store.chroma import ChromaLegalStore
 from src.services.vector_store.hybrid import HybridLegalStore
@@ -54,5 +54,5 @@ class VectorStoreFactory:
         """Khởi tạo embedding client một lần cho local Chroma fallback."""
 
         if self._embeddings is None:
-            self._embeddings = EmbeddingsClient()
+            self._embeddings = get_embeddings_client()
         return self._embeddings

@@ -3,9 +3,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, MessageSquarePlus, PanelLeft, Search, Send, SquarePen, Trash2 } from "lucide-react";
 import { parseSseChunk } from "@/lib/sse";
-import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, Conversation, LegalAnswerResponse } from "@/lib/types";
+import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, Conversation } from "@/lib/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+const API_BASE = "/backend-api";
 const DEFAULT_DATABASE = process.env.NEXT_PUBLIC_DEFAULT_DATABASE || "default";
 const LEGACY_STORAGE_KEYS = ["mscai_conversations", "mscai_active_conversation_id", "mscai_session_id"];
 
@@ -25,6 +25,65 @@ function compactTitle(text: string) {
   return value.length > 44 ? `${value.slice(0, 44)}...` : value || "Đoạn chat mới";
 }
 
+const STAGE_TITLES: Record<string, string> = {
+  request: "Request",
+  memory: "Short-memory",
+  intent: "Phân tích ý định",
+  prepare_query: "Chuẩn bị truy vấn",
+  categories: "Phân loại category",
+  retrieval: "Retrieval",
+  answer: "Tổng hợp câu trả lời",
+  format: "Định dạng và memory",
+  result: "Kết quả",
+  response: "Hoàn thiện response",
+};
+
+function formatElapsed(value?: number | null) {
+  if (value === null || value === undefined) return "";
+  return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} s`;
+}
+
+function progressTone(status: ChatStreamProgress["status"]): AgentTraceStep["tone"] {
+  if (status === "completed") return "success";
+  if (status === "warning") return "warning";
+  if (status === "error") return "error";
+  return "info";
+}
+
+function metadataDetail(metadata?: Record<string, unknown>) {
+  if (!metadata || Object.keys(metadata).length === 0) return "";
+  return Object.entries(metadata)
+    .map(([key, value]) => `${key}: ${describeValue(value)}`)
+    .join("; ");
+}
+
+function progressStep(data: ChatStreamProgress): AgentTraceStep {
+  const details = [data.message, data.detail, metadataDetail(data.metadata)].filter(Boolean);
+  return {
+    stage: data.stage,
+    status: data.status,
+    title: STAGE_TITLES[data.stage] || data.stage || "Xử lý",
+    detail: details.join(" · "),
+    elapsedMs: data.elapsed_ms,
+    tone: progressTone(data.status),
+  };
+}
+
+function upsertProgress(trace: AgentTraceStep[], data: ChatStreamProgress) {
+  const next = [...trace];
+  let match = -1;
+  for (let index = next.length - 1; index >= 0; index -= 1) {
+    if (next[index].stage === data.stage && next[index].status !== "completed" && next[index].status !== "error") {
+      match = index;
+      break;
+    }
+  }
+  const step = progressStep(data);
+  if (match >= 0) next[match] = step;
+  else next.push(step);
+  return next;
+}
+
 
 function describeValue(value: unknown) {
   if (Array.isArray(value)) return value.length ? value.join(", ") : "không có";
@@ -33,80 +92,6 @@ function describeValue(value: unknown) {
   return String(value);
 }
 
-function readToolCalls(answer: LegalAnswerResponse) {
-  const value = answer.debug?.tool_calls;
-  return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
-}
-
-function buildTrace(response: ChatResponse, liveStream: string[]): AgentTraceStep[] {
-  const answer = response.answer;
-  const debug = answer.debug || {};
-  const toolCalls = readToolCalls(answer);
-  const searchCall = toolCalls.find((item) => item.name === "search_legal_articles");
-  const intentCall = toolCalls.find((item) => item.name === "analyze_intent");
-  const prepareCall = toolCalls.find((item) => item.name === "prepare_retrieval_query");
-  const categoryCall = toolCalls.find((item) => item.name === "classify_categories");
-  const legalFlag = describeValue(debug.legal_flag || intentCall?.result);
-  const mode = describeValue(debug.retrieval_mode);
-  const categories = describeValue(debug.categories);
-  const searchArgs = typeof searchCall?.args === "object" && searchCall?.args ? (searchCall.args as Record<string, unknown>) : {};
-  const topK = describeValue(searchArgs.top_k);
-  const numResults = describeValue(searchCall?.num_results ?? answer.selected_articles?.length ?? 0);
-
-  const trace: AgentTraceStep[] = [
-    {
-      title: "Nhận câu hỏi",
-      detail: `Session ${response.session_id || "hiện tại"}; câu hỏi dài ${response.message.length} ký tự.`,
-      tone: "info",
-    },
-    {
-      title: "Đọc short-memory",
-      detail: `Memory ${describeValue(debug.memory_enabled)}; dùng thread theo session để giữ ngữ cảnh đoạn chat đang mở.`,
-      tone: "info",
-    },
-    {
-      title: "Phân tích ý định",
-      detail: legalFlag === "SKIP" ? "SKIP: câu hỏi không cần truy hồi pháp luật." : "NEXT: câu hỏi được xử lý bằng legal RAG.",
-      tone: legalFlag === "SKIP" ? "warning" : "success",
-    },
-  ];
-
-  if (legalFlag !== "SKIP") {
-    trace.push({
-      title: "Chuẩn bị truy vấn retrieval",
-      detail: `Mode ${mode}; retrieval query: ${describeValue(debug.retrieval_question)}.`,
-      tone: "info",
-    });
-    if (debug.rewritten_question) {
-      trace.push({ title: "Rewrite query", detail: describeValue(debug.rewritten_question), tone: "success" });
-    }
-    if (debug.hypothetical_answer) {
-      trace.push({ title: "HyDE", detail: describeValue(debug.hypothetical_answer), tone: "success" });
-    }
-    trace.push({
-      title: "Phân loại category",
-      detail: categoryCall ? `LLM chọn: ${categories}.` : `Dùng category cấu hình/request: ${categories}.`,
-      tone: "info",
-    });
-    trace.push({
-      title: "Hybrid search",
-      detail: `Tool backend search_legal_articles; top_k ${topK}; kết quả ${numResults}; per_category ${describeValue(debug.per_category)}.`,
-      tone: Number(searchCall?.num_results ?? 0) > 0 ? "success" : "warning",
-    });
-  }
-
-  trace.push({
-    title: "Tổng hợp câu trả lời",
-    detail: `Nguồn điều luật: ${answer.relevant_articles?.length || 0}; văn bản: ${answer.relevant_docs?.length || 0}.`,
-    tone: answer.relevant_articles?.length ? "success" : "warning",
-  });
-
-  if (liveStream.length) {
-    trace.push({ title: "SSE backend", detail: liveStream.join(" → "), tone: "info" });
-  }
-
-  return trace;
-}
 
 export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -190,7 +175,11 @@ export default function Home() {
 
   function handleStreamEvent(event: ChatStreamEvent, conversationId: string, assistantId: string) {
     if (event.event === "status") {
-      updateAssistant(conversationId, assistantId, (message) => ({ ...message, stream: [...message.stream, event.data.message] }));
+      updateAssistant(conversationId, assistantId, (message) => ({
+        ...message,
+        stream: event.data.status === "running" ? message.stream : [...message.stream, event.data.message],
+        trace: upsertProgress(message.trace, event.data),
+      }));
       return;
     }
     if (event.event === "error") {
@@ -198,7 +187,7 @@ export default function Home() {
         ...message,
         content: event.data.message || "Có lỗi khi gọi backend.",
         stream: [...message.stream, "Lỗi"],
-        trace: [...message.trace, { title: "Lỗi", detail: event.data.message || "Backend trả lỗi.", tone: "error" }],
+        trace: upsertProgress(message.trace, event.data),
       }));
       return;
     }
@@ -209,12 +198,25 @@ export default function Home() {
         content: answer.answer || "Không có câu trả lời.",
         sources: answer.relevant_articles || [],
         stream: [...message.stream, "Đã nhận kết quả"],
-        trace: buildTrace(event.data, [...message.stream, "Đã nhận kết quả"]),
+        trace: [
+          ...message.trace,
+          {
+            stage: "result",
+            status: "completed",
+            title: "Kết quả",
+            detail: `Nhận ${answer.relevant_articles?.length || 0} điều luật và ${answer.relevant_docs?.length || 0} văn bản nguồn.`,
+            tone: "success",
+          },
+        ],
       }));
       return;
     }
     if (event.event === "done") {
-      updateAssistant(conversationId, assistantId, (message) => ({ ...message, stream: [...message.stream, event.data.message] }));
+      updateAssistant(conversationId, assistantId, (message) => ({
+        ...message,
+        stream: [...message.stream, event.data.message],
+        trace: upsertProgress(message.trace, event.data),
+      }));
     }
   }
 
@@ -229,7 +231,7 @@ export default function Home() {
       role: "assistant",
       content: "Đang tạo câu trả lời...",
       stream: [],
-      trace: [{ title: "Khởi tạo", detail: "Đã gửi câu hỏi tới backend legal chat stream.", tone: "info" }],
+      trace: [{ stage: "client", status: "completed", title: "Gửi request", detail: `POST ${API_BASE}/api/v1/legal/chat/stream`, tone: "success" }],
       sources: [],
     };
 
@@ -355,9 +357,15 @@ export default function Home() {
                     <div className="streamHead">Luồng xử lý agent</div>
                     <div className="streamBody">
                       {message.trace.map((step, index) => (
-                        <div className={`traceStep ${step.tone || "info"}`} key={`${step.title}-${index}`}>
+                        <div className={`traceStep ${step.tone || "info"} ${step.status || ""}`} key={`${step.title}-${index}`}>
                           <span>{index + 1}</span>
-                          <div><strong>{step.title}</strong><p>{step.detail}</p></div>
+                          <div>
+                            <div className="traceTitleRow">
+                              <strong>{step.title}</strong>
+                              {step.elapsedMs !== null && step.elapsedMs !== undefined ? <small>{formatElapsed(step.elapsedMs)}</small> : null}
+                            </div>
+                            <p>{step.detail}</p>
+                          </div>
                         </div>
                       ))}
                       {message.trace.length === 0 ? message.stream.map((line, index) => <div className="traceLine" key={`${line}-${index}`}>• {line}</div>) : null}

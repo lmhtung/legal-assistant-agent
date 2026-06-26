@@ -17,9 +17,11 @@ class LLMClient:
         except ImportError as exc:  # pragma: no cover - guard khi thiếu dependency
             raise RuntimeError("Install langchain-openai to use the LLM endpoint") from exc
 
+        self.base_url = settings.llm.base_url
+        self.model_name = settings.llm.model_name
         self.chat = ChatOpenAI(
-            model=settings.llm.model_name,
-            base_url=settings.llm.base_url,
+            model=self.model_name,
+            base_url=self.base_url,
             api_key=settings.llm.api_key,
             temperature=settings.llm.temperature,
             max_tokens=settings.llm.max_tokens,
@@ -28,11 +30,21 @@ class LLMClient:
     async def ainvoke(self, prompt: str) -> str:
         """Gọi chat model bất đồng bộ bằng plain prompt và trả về plain text."""
 
-        response = await self.chat.ainvoke(prompt)
+        try:
+            response = await self.chat.ainvoke(prompt)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Không gọi được LLM endpoint {self.base_url}, model {self.model_name}: {exc}"
+            ) from exc
         return response.content
 
     async def ainvoke_messages(self, messages) -> str:
         """Gọi chat model bằng danh sách LangChain messages."""
 
-        response = await self.chat.ainvoke(messages)
+        try:
+            response = await self.chat.ainvoke(messages)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Không gọi được LLM endpoint {self.base_url}, model {self.model_name}: {exc}"
+            ) from exc
         return response.content

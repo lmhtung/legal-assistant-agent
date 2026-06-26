@@ -1,67 +1,61 @@
 # Data Structure
 
-Đây là hợp đồng dữ liệu mà hệ thống data bên ngoài cần cung cấp cho vector store. Backend agent không import, không sửa và không quản lý dataset.
+PostgreSQL là nguồn dữ liệu chuẩn để backend tự build Chroma khi khởi động.
 
-## Record Chuẩn
+## Record chuẩn
 
 ```json
 {
-  "id": "1", 
-  "law_id": "44/2013/NĐ-CP",
-  "law_name": "Quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động",
-  "doc_type": "Nghị định", 
+  "id": 1,
+  "law_id": "41/2024/QH15",
+  "law_name": "Bộ luật Luật Bảo hiểm xã hội 2024 số áp dụng năm 2025",
+  "doc_type": "Bộ luật",
   "article": "Điều 1",
   "article_title": "Phạm vi điều chỉnh",
-  "content": "Nghị định này quy định chi tiết thi hành một số điều của Bộ luật lao động về hợp đồng lao động.",
-  "author": "Chính phủ",
+  "content": "Luật này quy định về quyền, trách nhiệm...",
+  "author": "Quốc hội",
+  "category": "luat_bao_hiem_xa_hoi"
 }
 ```
 
-## Text Nên Được Embedding
-
-Vector index bên ngoài nên embedding text theo format:
+Các cột bắt buộc:
 
 ```text
-{doc_type} {law_id} {law_name}
-{article} {article_title}
-{content}
+id, law_id, law_name, doc_type, article, article_title,
+content, author, category
 ```
 
-Không nên đưa `extra` vào embedding vì `extra` là quan hệ pháp lý để mở rộng nguồn sau retrieval, không phải nội dung chính của điều luật.
-
-## Field `extra`
-
-`extra` là tập/danh sách các điều luật liên quan đến record hiện tại.
-
-Format từng phần tử:
+`chapter` và `extra` là tùy chọn. `extra` có thể là JSON/JSONB/array chứa các
+reference dạng:
 
 ```text
 doc_type|law_id|law_name|article
 ```
 
-Khi retrieval tìm được `Điều 1`, agent sẽ:
+## Text được embedding
 
-1. thêm `Điều 1` vào `relevant_articles`;
-2. đọc `extra` của `Điều 1`;
-3. chuẩn hóa mỗi item thành `law_id|law_name|article`;
-4. thêm các điều liên quan vào `relevant_articles` và `relevant_docs`.
-
-Nhờ vậy phần nguồn liên quan được kiểm soát bằng data, không phụ thuộc LLM.
-
-## Metadata Vector Store Cần Có
-
-Để agent dựng lại `LegalArticle`, mỗi hit từ vector store cần có metadata tối thiểu:
+Mỗi record dùng đúng một format:
 
 ```text
-id
-law_id
-law_name
-doc_type
-database
-chapter
-article
-article_title
-content
-author
-extra
+{law_name}
+{article_title}
+{content}
 ```
+
+Không đưa `id`, `law_id`, `doc_type`, `article`, `author`, `category` hoặc
+`extra` vào vector text. Các field này vẫn được lưu trong Chroma metadata để
+lọc, trích dẫn và dựng lại `LegalArticle`.
+
+## Chia collection
+
+Mỗi `category` tương ứng một collection:
+
+```text
+legal_articles_luat_bao_hiem_xa_hoi
+legal_articles_luat_dau_thau
+...
+```
+
+LLM phân loại category trước retrieval, sau đó agent chỉ search các collection
+phù hợp. Build document và search query luôn sử dụng cùng `EmbeddingsClient`,
+cùng endpoint, model và tokenizer phía embedding server.

@@ -1,6 +1,8 @@
 """Wrapper cho embedding endpoint OpenAI-compatible."""
 from __future__ import annotations
 
+from functools import lru_cache
+
 from src.config import settings
 
 
@@ -33,3 +35,10 @@ class EmbeddingsClient:
         """Embed một query đã rewrite/HyDE để search vector store."""
 
         return self.embeddings.embed_query(text)
+
+
+@lru_cache(maxsize=1)
+def get_embeddings_client() -> EmbeddingsClient:
+    """Dùng chung một embedding client cho build index và query retrieval."""
+
+    return EmbeddingsClient()

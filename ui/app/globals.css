@@ -51,8 +51,11 @@ button { color: inherit; background: none; border: 0; cursor: pointer; }
 .streamBody { padding: 10px 12px; color: #d8d8dc; font-size: 13px; display: grid; gap: 8px; }
 .traceStep { display: grid; grid-template-columns: 24px 1fr; gap: 9px; align-items: start; }
 .traceStep > span { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: #24252a; color: #d9d9de; font-size: 12px; }
+.traceTitleRow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.traceTitleRow small { color: #8f9097; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .traceStep strong { display: block; color: #f2f2f3; font-size: 13px; line-height: 1.25; }
-.traceStep p { margin: 2px 0 0; color: #bfc0c6; line-height: 1.35; }
+.traceStep p { margin: 2px 0 0; color: #bfc0c6; line-height: 1.4; overflow-wrap: anywhere; }
+.traceStep.running > span, .traceStep.started > span { animation: tracePulse 1.2s ease-in-out infinite; }
 .traceStep.success > span { background: #15351f; color: #89e39f; }
 .traceStep.warning > span { background: #3a3016; color: #f0cf7b; }
 .traceStep.error > span { background: #401b1b; color: #ff9b9b; }
@@ -78,4 +81,9 @@ button { color: inherit; background: none; border: 0; cursor: pointer; }
   .messages { padding-inline: 16px; padding-bottom: 190px; }
   .composer { grid-template-columns: auto 1fr auto; border-radius: 24px; }
   .traceButton { display: none; }
+}
+
+@keyframes tracePulse {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; box-shadow: 0 0 0 3px rgba(255,255,255,.06); }
 }
