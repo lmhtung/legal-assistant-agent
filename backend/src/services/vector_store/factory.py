@@ -37,6 +37,8 @@ class VectorStoreFactory:
                 embeddings=self._get_embeddings(),
             ),
             rrf_k=self.settings.rrf_k,
+            dense_weight=self.settings.dense_weight,
+            bm25_weight=self.settings.bm25_weight,
         )
 
     def _create_bm25_store(self, database: str) -> InMemoryLegalStore:

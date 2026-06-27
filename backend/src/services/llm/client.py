@@ -25,6 +25,7 @@ class LLMClient:
             api_key=settings.llm.api_key,
             temperature=settings.llm.temperature,
             max_tokens=settings.llm.max_tokens,
+            extra_body={"chat_template_kwargs": {"enable_thinking": settings.llm.enable_thinking}},
         )
 
     async def ainvoke(self, prompt: str) -> str:

@@ -1,4 +1,4 @@
-"""Vector search tools dùng Chroma đã được data system build sẵn."""
+"""Vector retriever đọc Chroma index đã được backend/data system build sẵn."""
 from __future__ import annotations
 
 import json
@@ -14,8 +14,11 @@ _NON_WORD_RE = re.compile(r"[^\w]+")
 def safe_collection_name(value: str) -> str:
     """Đổi tên database thành tên collection hợp lệ cho Chroma."""
 
-    name = _NON_WORD_RE.sub("_", value.lower()).strip("_")
-    return name[:60] or "legal_articles"
+    name = _NON_WORD_RE.sub("_", value.lower()).strip("._-")
+    name = name[:60].strip("._-")
+    if len(name) < 3:
+        return "legal_articles"
+    return name
 
 
 class ChromaRetriever:

@@ -49,7 +49,6 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             session_id=request.session_id,
             categories=request.categories,
             top_k=request.top_k or self.settings.legal_assistant.vector_store.top_k,
-            rewrite_query_enabled=self.settings.legal_assistant.query_rewrite.enabled,
         )
         return {
             "question_id": request.id,
@@ -57,7 +56,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             "question": request.question,
             "competition_mode": bool(competition_mode),
             "retrieval_question": request.question,
-            "retrieval_mode": self.settings.legal_assistant.retrieval.query_mode,
+            "retrieval_mode": _retrieval_mode(self.settings),
             "query_variants": [request.question],
             "categories": request.categories,
             "messages": [HumanMessage(content=request.question)] if HumanMessage else [],
@@ -103,6 +102,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                     "per_category": state.get("per_category", False),
                     "rewritten_question": state.get("rewritten_question"),
                     "hypothetical_answer": state.get("hypothetical_answer"),
+                    "category_hypothetical_answers": state.get("category_hypothetical_answers", {}),
                     "skip_retrieval": state.get("skip_retrieval", False),
                     "memory_enabled": self.settings.short_memory.enabled,
                 }
@@ -155,3 +155,17 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         ):
             state = await node(self, state)
         return state
+
+
+def _retrieval_mode(settings) -> str:
+    """Tên mode retrieval hiển thị trong debug/progress."""
+
+    rewrite = settings.legal_assistant.rewrite.enabled
+    hyde = settings.legal_assistant.hyde.enabled
+    if rewrite and hyde:
+        return "rewrite+hyde"
+    if rewrite:
+        return "rewrite"
+    if hyde:
+        return "hyde"
+    return "none"

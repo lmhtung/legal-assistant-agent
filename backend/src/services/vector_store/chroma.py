@@ -12,10 +12,18 @@ _NON_WORD_RE = re.compile(r"[^\w]+")
 
 
 def safe_collection_name(value: str) -> str:
-    """Đổi tên database bất kỳ thành tên collection hợp lệ cho Chroma."""
+    """Đổi tên database bất kỳ thành tên collection hợp lệ cho Chroma.
 
-    name = _NON_WORD_RE.sub("_", value.lower()).strip("_")
-    return name[:60] or "legal_articles"
+    Chroma yêu cầu tên dài 3-512 ký tự, chỉ gồm a-zA-Z0-9._- và phải bắt đầu,
+    kết thúc bằng chữ hoặc số. Vì category tiếng Việt có thể rất dài, ta cắt
+    ngắn rồi strip lại để tránh kết thúc bằng dấu gạch dưới.
+    """
+
+    name = _NON_WORD_RE.sub("_", value.lower()).strip("._-")
+    name = name[:60].strip("._-")
+    if len(name) < 3:
+        return "legal_articles"
+    return name
 
 
 class ChromaLegalStore:

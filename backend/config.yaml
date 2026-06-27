@@ -8,14 +8,18 @@ ui:
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8009/v1
-  default_model: qwen3-4b-fp8
-  temperature: 1.0
+  base_url: http://localhost:8017/v1
+  default_model: qwen3_5-9b
+  temperature: 0.6
+  max_tokens: 2000
+  enable_thinking: false
 
 embeddings:
   api_key: sk-1234
   base_url: http://localhost:8013/v1
   model: bge-m3
+  max_input_tokens: 8190 # cắt text embedding để không vượt context model
+  tokenizer_encoding: cl100k_base
 
 short_memory:
   enabled: true
@@ -27,19 +31,19 @@ legal_assistant:
     token_streaming: true # true: stream token LLM trong bubble chat
   competition:
     enabled: false # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
-    max_concurrency: 4 # số câu hỏi competition chạy song song
+    max_concurrency: 8 # số câu hỏi competition chạy song song
     save_outputs: true # tự lưu kết quả vào output_dir khi xong hoặc lỗi
     output_dir: ./outputs
-  retrieval:
-    query_mode: rewrite # none | rewrite | hyde
-  query_rewrite:
-    enabled: true
-    use_llm: true
+  rewrite:
+    enabled: false
     max_variants: 3
+  hyde:
+    enabled: true
   categories:
-    top_k_when_le_2_categories: 2
-    top_k_when_many_categories: 1
-    hyde_top_k: 3
+    many_category_threshold: 3 # số category <= threshold thì dùng top_k_when_le_threshold_categories
+    top_k_when_le_threshold_categories: 2
+    top_k_when_many_categories: 3
+    hyde_top_k: 5
   postgres:
     enabled: true
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
@@ -51,8 +55,10 @@ legal_assistant:
     persist_directory: ./chroma_db
     default_collection: legal_articles
     rrf_k: 60
+    dense_weight: 2.0 # trọng số Chroma/vector trong hybrid RRF
+    bm25_weight: 1.0 # trọng số BM25/keyword trong hybrid RRF
     top_k: 8
-    bm25_tokenizer: underthesea # auto | underthesea | regex
-    bm25_k1: 2.0
-    bm25_b: 1.0
-    bm25_epsilon: 0.5
+    bm25_tokenizer: auto # auto | underthesea | regex
+    bm25_k1: 1.2
+    bm25_b: 0.65
+    bm25_epsilon: 0.25

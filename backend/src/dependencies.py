@@ -24,15 +24,9 @@ def get_llm_client() -> LLMClient:
 
 @lru_cache(maxsize=1)
 def get_agent_registry() -> AgentRegistry:
-    """Tạo registry agent một lần cho toàn bộ FastAPI process.
+    """Tạo registry agent một lần cho toàn bộ FastAPI process."""
 
-    Nếu config tắt ``query_rewrite.use_llm`` thì legal agent vẫn chạy được, nhưng
-    sẽ bỏ qua LLM ở bước rewrite/HyDE và dùng fallback answer khi cần.
-    """
-
-    settings = get_settings()
-    llm = get_llm_client() if settings.legal_assistant.query_rewrite.use_llm else None
-    return create_agent_registry(llm=llm)
+    return create_agent_registry(llm=get_llm_client())
 
 
 @lru_cache(maxsize=1)

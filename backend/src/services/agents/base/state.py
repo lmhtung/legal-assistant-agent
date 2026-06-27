@@ -31,6 +31,7 @@ class AgentState(TypedDict, total=False):
     legal_flag: str
     rewritten_question: str
     hypothetical_answer: str
+    category_hypothetical_answers: dict[str, str]
     retrieval_question: str
     retrieval_mode: str
     query_variants: list[str]

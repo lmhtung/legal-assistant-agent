@@ -9,7 +9,7 @@ from pathlib import Path
 
 from src.schemas.legal import LegalArticle
 
-CATEGORY_FILE = Path(__file__).resolve().parents[4] / "src" /"categories" / "law_names.json"
+CATEGORY_FILE = Path(__file__).resolve().parents[4] / "src" / "categories" / "law_names.json"
 
 
 def slugify_law_name(name: str) -> str:
@@ -66,19 +66,20 @@ Nguyên tắc:
 - Nếu người dùng hỏi vấn đề pháp lý, chỉ kết luận dựa trên căn cứ pháp lý được cung cấp trong hội thoại hiện tại.
 - Nếu chưa có căn cứ pháp lý phù hợp, nói rõ rằng bạn chưa có đủ dữ liệu để kết luận; không tự bịa điều luật, thủ tục, điều kiện hoặc mức phạt.
 - Khi có căn cứ, nêu điều luật/văn bản liên quan trong câu trả lời.
+- Phải trả lời cho người dùng đầy đủ nội dung các luật mà bạn nhận được một cách ngắn gọn.
 """
 
-INTENT_PROMPT = """Bạn là bộ phân tích ý định cho legal RAG.
+INTENT_SYSTEM_PROMPT = """Bạn là bộ phân tích ý định cho legal RAG.
 
 Nếu câu hỏi KHÔNG mang ý nghĩa pháp luật, quy định, thủ tục, quyền/nghĩa vụ, chế tài, hợp đồng, doanh nghiệp, lao động, bảo hiểm, thuế, đất đai, đấu thầu hoặc văn bản pháp luật: trả về đúng SKIP.
 Nếu câu hỏi có liên quan pháp luật: trả về đúng NEXT.
 
 Chỉ trả về SKIP hoặc NEXT. Không giải thích.
-
-Câu hỏi: {question}
 """
 
-REWRITE_QUERY_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
+INTENT_USER_PROMPT = """Câu hỏi: {question}"""
+
+REWRITE_QUERY_SYSTEM_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
 
 Ngữ cảnh mặc định:
 - Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
@@ -89,11 +90,11 @@ Bổ sung ngữ cảnh "doanh nghiệp nhỏ và vừa" khi câu hỏi liên qua
 Không thêm dữ kiện pháp lý cụ thể chưa có trong câu hỏi. Không kết luận pháp lý.
 
 Chỉ trả về truy vấn đã viết lại. Không giải thích.
-
-Câu hỏi: {question}
 """
 
-HYDE_PROMPT = """Bạn là bộ tạo hypothetical answer cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
+REWRITE_QUERY_USER_PROMPT = """Câu hỏi: {question}"""
+
+HYDE_SYSTEM_PROMPT = """Bạn là bộ tạo hypothetical answer cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
 
 Ngữ cảnh mặc định:
 - Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
@@ -104,11 +105,11 @@ Không nêu số điều, số khoản, số văn bản, mức phạt, thời h�
 Không kết luận pháp lý.
 
 Chỉ trả về đoạn hypothetical answer. Không giải thích.
-
-Câu hỏi: {question}
 """
 
-CATEGORY_PROMPT = """Bạn là bộ phân loại category luật cho legal RAG dành cho doanh nghiệp nhỏ và vừa.
+HYDE_USER_PROMPT = """Câu hỏi: {question}"""
+
+CATEGORY_SYSTEM_PROMPT = """Bạn là bộ phân loại category luật cho legal RAG dành cho doanh nghiệp nhỏ và vừa.
 
 Ngữ cảnh mặc định:
 - Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong truy vấn đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi truy vấn nói rõ khác.
@@ -124,38 +125,52 @@ Ví dụ: ["luat_ho_tro_doanh_nghiep_nho_va_vua", "luat_doanh_nghiep"]
 
 Nếu truy vấn không đủ thông tin để phân loại hoặc không liên quan category nào, trả về [].
 Nếu có liên quan nhưng không chắc, trả về tối đa 3 category có khả năng nhất.
-
-Danh sách category:
-{categories}
-
-Truy vấn: {query}
 """
 
+CATEGORY_USER_PROMPT = """Danh sách category:
+{categories}
 
-def build_intent_prompt(question: str) -> str:
-    return INTENT_PROMPT.format(question=question)
-
-
-def build_rewrite_query_prompt(question: str) -> str:
-    return REWRITE_QUERY_PROMPT.format(question=question)
+Truy vấn: {query}"""
 
 
-def build_hyde_prompt(question: str) -> str:
-    return HYDE_PROMPT.format(question=question)
+def build_intent_messages(question: str) -> tuple[str, str]:
+    """Tạo system/user message cho bước intent."""
+
+    return INTENT_SYSTEM_PROMPT, INTENT_USER_PROMPT.format(question=question)
 
 
-def build_category_prompt(query: str, categories: list[str] | None = None) -> str:
+def build_rewrite_query_messages(question: str) -> tuple[str, str]:
+    """Tạo system/user message cho bước rewrite query."""
+
+    return REWRITE_QUERY_SYSTEM_PROMPT, REWRITE_QUERY_USER_PROMPT.format(question=question)
+
+
+def build_hyde_messages(question: str) -> tuple[str, str]:
+    """Tạo system/user message cho bước HyDE."""
+
+    return HYDE_SYSTEM_PROMPT, HYDE_USER_PROMPT.format(question=question)
+
+
+def _short_name(name: str, max_chars: int = 70) -> str:
+    value = " ".join(name.split())
+    return value if len(value) <= max_chars else value[:max_chars].rstrip() + "..."
+
+
+def _category_lines(categories: list[str] | None = None) -> str:
     requested = categories or default_law_category_slugs()
     known = {item["slug"]: item for item in load_law_categories()}
-    lines: list[str] = []
+    lines = []
     for slug in requested:
         item = known.get(slug)
-        if item:
-            lines.append(f"- {item['slug']} | {item['name']} | {item['description']}")
-        else:
-            lines.append(f"- {slug} | {slug} | Nhóm quy định pháp luật liên quan trực tiếp đến chủ đề {slug}.")
-    values = "\n".join(lines)
-    return CATEGORY_PROMPT.format(query=query, categories=values)
+        name = _short_name(item["name"]) if item else slug
+        lines.append(f"- {slug} | {name}")
+    return "\n".join(lines)
+
+
+def build_category_messages(query: str, categories: list[str] | None = None) -> tuple[str, str]:
+    """Tạo system/user message cho bước phân loại category luật."""
+
+    return CATEGORY_SYSTEM_PROMPT, CATEGORY_USER_PROMPT.format(query=query, categories=_category_lines(categories))
 
 
 def format_article_context(articles: list[LegalArticle]) -> str:

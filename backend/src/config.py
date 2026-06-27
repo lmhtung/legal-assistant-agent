@@ -65,6 +65,7 @@ class LLMSettings(ConfigModel):
     )
     temperature: float = 0.0
     max_tokens: int | None = None
+    enable_thinking: bool = False
 
 
 class EmbeddingsSettings(ConfigModel):
@@ -73,6 +74,8 @@ class EmbeddingsSettings(ConfigModel):
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8002/v1"
     model: str = "bge-m3"
+    max_input_tokens: int = Field(default=8190, ge=128)
+    tokenizer_encoding: str = "cl100k_base"
 
 
 class ShortMemorySettings(ConfigModel):
@@ -108,24 +111,24 @@ class CompetitionSettings(ConfigModel):
         return self
 
 
-class RetrievalSettings(ConfigModel):
-    """Chọn text đem đi embedding/search: none, rewrite hoặc hyde."""
+class RewriteSettings(ConfigModel):
+    """Bật/tắt rewrite query và giới hạn số biến thể query retrieval."""
 
-    query_mode: Literal["none", "rewrite", "hyde"] = "rewrite"
-
-
-class QueryRewriteSettings(ConfigModel):
-    """Bật/tắt bước LLM rewrite hoặc HyDE trước khi truy hồi."""
-
-    enabled: bool = True
-    use_llm: bool = True
+    enabled: bool = False
     max_variants: int = 3
+
+
+class HyDESettings(ConfigModel):
+    """Bật/tắt HyDE: sinh hypothetical answer để làm query dense retrieval."""
+
+    enabled: bool = False
 
 
 class CategorySettings(ConfigModel):
     """Cấu hình số kết quả retrieval theo category."""
 
-    top_k_when_le_2_categories: int = 2
+    many_category_threshold: int = Field(default=2, ge=1)
+    top_k_when_le_threshold_categories: int = 2
     top_k_when_many_categories: int = 1
     hyde_top_k: int = 3
 
@@ -157,6 +160,8 @@ class VectorStoreSettings(ConfigModel):
     persist_directory: Path = Path("./chroma_db")
     default_collection: str = "legal_articles"
     rrf_k: int = 60
+    dense_weight: float = Field(default=2.0, gt=0)
+    bm25_weight: float = Field(default=1.0, gt=0)
     top_k: int = 8
     bm25_tokenizer: Literal["auto", "underthesea", "regex"] = "auto"
     bm25_k1: float = 2.0
@@ -182,8 +187,8 @@ class LegalAssistantSettings(ConfigModel):
 
     chat: ChatSettings = Field(default_factory=ChatSettings)
     competition: CompetitionSettings = Field(default_factory=CompetitionSettings)
-    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
-    query_rewrite: QueryRewriteSettings = Field(default_factory=QueryRewriteSettings)
+    rewrite: RewriteSettings = Field(default_factory=RewriteSettings)
+    hyde: HyDESettings = Field(default_factory=HyDESettings)
     categories: CategorySettings = Field(default_factory=CategorySettings)
     postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)

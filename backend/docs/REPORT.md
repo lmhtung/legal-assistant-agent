@@ -174,8 +174,11 @@ legal_assistant:
     table_name: legal_knowledge_records
     category_column: category
     batch_size: 128
-  retrieval:
-    query_mode: rewrite
+  rewrite:
+    enabled: true
+    max_variants: 3
+  hyde:
+    enabled: false
   vector_store:
     mode: hybrid
     persist_directory: ./chroma_db

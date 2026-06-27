@@ -8,10 +8,19 @@ from src.services.vector_store.base import LegalVectorStore
 class HybridLegalStore:
     """Kết hợp BM25-like search và vector search bằng Reciprocal Rank Fusion."""
 
-    def __init__(self, lexical_store: LegalVectorStore, vector_store: LegalVectorStore, rrf_k: int = 60) -> None:
+    def __init__(
+        self,
+        lexical_store: LegalVectorStore,
+        vector_store: LegalVectorStore,
+        rrf_k: int = 60,
+        dense_weight: float = 1.0,
+        bm25_weight: float = 1.0,
+    ) -> None:
         self.lexical_store = lexical_store
         self.vector_store = vector_store
         self.rrf_k = rrf_k
+        self.dense_weight = dense_weight
+        self.bm25_weight = bm25_weight
 
     def add_articles(self, articles: list[LegalArticle]) -> None:
         """Index cùng record vào cả hai backend retrieval."""
@@ -24,10 +33,14 @@ class HybridLegalStore:
 
         merged: dict[str, RetrievedCandidate] = {}
         scores: dict[str, float] = {}
-        for source_results in [self.lexical_store.search(query), self.vector_store.search(query)]:
+        weighted_results = [
+            (self.lexical_store.search(query), self.bm25_weight),
+            (self.vector_store.search(query), self.dense_weight),
+        ]
+        for source_results, weight in weighted_results:
             for rank, candidate in enumerate(source_results, start=1):
                 article_id = candidate.article.article_id
-                scores[article_id] = scores.get(article_id, 0.0) + 1.0 / (self.rrf_k + rank)
+                scores[article_id] = scores.get(article_id, 0.0) + weight / (self.rrf_k + rank)
                 if article_id not in merged:
                     merged[article_id] = candidate
         ranked = sorted(merged.values(), key=lambda item: scores[item.article.article_id], reverse=True)

@@ -10,7 +10,6 @@ class AgentContext(BaseModel):
     session_id: str | None = None
     categories: list[str] = Field(default_factory=lambda: ["default"])
     top_k: int = 8
-    rewrite_query_enabled: bool = True
 
     @property
     def databases(self) -> list[str]:

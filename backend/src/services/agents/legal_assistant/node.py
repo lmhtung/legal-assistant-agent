@@ -13,15 +13,14 @@ except ImportError:  # pragma: no cover
     HumanMessage = None
     SystemMessage = None
 
-from src.schemas.legal import LegalArticle, RetrievalQuery
-from src.services.agents.base.context import AgentContext
+from src.schemas.legal import LegalArticle, RetrievalQuery, RetrievedCandidate
 from src.services.agents.legal_assistant.prompt import (
     SYSTEM_PROMPT,
-    build_category_prompt,
-    build_hyde_prompt,
-    build_intent_prompt,
+    build_category_messages,
+    build_hyde_messages,
+    build_intent_messages,
     build_legal_context_message,
-    build_rewrite_query_prompt,
+    build_rewrite_query_messages,
     default_law_category_slugs,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
@@ -65,7 +64,8 @@ async def analyze_intent_node(runtime: Any, state: LegalAssistantState) -> Legal
     error: str | None = None
     if runtime.llm is not None:
         try:
-            flag = (await runtime.llm.ainvoke(build_intent_prompt(state["question"]))).strip().upper()
+            system_prompt, human_prompt = build_intent_messages(state["question"])
+            flag = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip().upper()
         except Exception as exc:  # pragma: no cover
             error = str(exc)
             state.setdefault("debug", {})["intent_error"] = error
@@ -88,21 +88,20 @@ async def analyze_intent_node(runtime: Any, state: LegalAssistantState) -> Legal
 
 
 async def prepare_retrieval_query_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
-    """Bước 2: none/rewrite/hyde để tạo text retrieval."""
+    """Bước 2: tạo query variants từ rewrite và/hoặc HyDE."""
 
     started = perf_counter()
     question = state["question"]
-    mode = runtime.settings.legal_assistant.retrieval.query_mode
-    rewrite_enabled = runtime.settings.legal_assistant.query_rewrite.enabled
-    if not rewrite_enabled and mode in {"rewrite", "hyde"}:
-        mode = "none"
+    rewrite_enabled = runtime.settings.legal_assistant.rewrite.enabled
+    hyde_enabled = runtime.settings.legal_assistant.hyde.enabled
+    mode = _retrieval_mode(rewrite_enabled, hyde_enabled)
     state["retrieval_mode"] = mode
     await emit_progress(
         "prepare_query",
         "started",
         f"Đang chuẩn bị truy vấn retrieval theo mode {mode}",
         detail="Không gọi retrieval nếu intent là SKIP." if state.get("skip_retrieval") else None,
-        metadata={"mode": mode},
+        metadata={"mode": mode, "rewrite_enabled": rewrite_enabled, "hyde_enabled": hyde_enabled},
     )
 
     if state.get("skip_retrieval") or mode == "none":
@@ -116,29 +115,57 @@ async def prepare_retrieval_query_node(runtime: Any, state: LegalAssistantState)
         )
         return result
 
-    retrieval_text = question
-    provider = "fallback"
-    error: str | None = None
-    if runtime.llm is not None and runtime.settings.legal_assistant.query_rewrite.use_llm:
-        provider = "llm"
-        prompt = build_rewrite_query_prompt(question) if mode == "rewrite" else build_hyde_prompt(question)
-        try:
-            candidate = (await runtime.llm.ainvoke(prompt)).strip()
-            retrieval_text = _clean_retrieval_text(candidate, mode) or question
-        except Exception as exc:  # pragma: no cover
-            error = str(exc)
-            state.setdefault("debug", {})["prepare_retrieval_error"] = error
+    rewritten_question: str | None = None
+    hypothetical_answer: str | None = None
+    errors: list[str] = []
+    provider = "llm" if runtime.llm is not None else "fallback"
 
-    result = _set_retrieval_text(runtime, state, retrieval_text, mode=mode, provider=provider)
+    if runtime.llm is not None and rewrite_enabled:
+        try:
+            system_prompt, human_prompt = build_rewrite_query_messages(question)
+            candidate = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip()
+            rewritten_question = _clean_retrieval_text(candidate, "rewrite") or question
+            state["rewritten_question"] = rewritten_question
+        except Exception as exc:  # pragma: no cover
+            errors.append(f"rewrite: {exc}")
+            state.setdefault("debug", {})["rewrite_error"] = str(exc)
+
+    if runtime.llm is not None and hyde_enabled and not rewrite_enabled:
+        try:
+            system_prompt, human_prompt = build_hyde_messages(question)
+            candidate = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip()
+            hypothetical_answer = _clean_retrieval_text(candidate, "hyde") or question
+            state["hypothetical_answer"] = hypothetical_answer
+        except Exception as exc:  # pragma: no cover
+            errors.append(f"hyde: {exc}")
+            state.setdefault("debug", {})["hyde_error"] = str(exc)
+
+    retrieval_text = hypothetical_answer or rewritten_question or question
+    state["retrieval_question"] = retrieval_text
+    state["query_variants"] = _build_query_variants(runtime, question, rewritten_question, hypothetical_answer)
+    state.setdefault("tool_calls", []).append(
+        {
+            "name": "prepare_retrieval_query",
+            "provider": provider,
+            "args": {"mode": mode},
+            "result": retrieval_text,
+            "query_variants": state["query_variants"],
+        }
+    )
     await emit_progress(
         "prepare_query",
-        "warning" if error else "completed",
-        f"Đã chuẩn bị truy vấn {mode}" if not error else f"{mode} lỗi, dùng câu hỏi gốc",
+        "warning" if errors else "completed",
+        f"Đã chuẩn bị truy vấn {mode}" if not errors else "Một phần rewrite/HyDE lỗi, dùng phần còn lại",
         elapsed_ms=_elapsed_ms(started),
-        detail=error,
-        metadata={"mode": mode, "provider": provider, "retrieval_question": retrieval_text},
+        detail="; ".join(errors) or None,
+        metadata={
+            "mode": mode,
+            "provider": provider,
+            "retrieval_question": retrieval_text,
+            "query_variant_count": len(state["query_variants"]),
+        },
     )
-    return result
+    return state
 
 
 async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
@@ -164,7 +191,10 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
     settings = runtime.settings.legal_assistant.categories
     available_categories = default_law_category_slugs()
     mode = state.get("retrieval_mode")
-    if mode == "hyde":
+    rewrite_enabled = runtime.settings.legal_assistant.rewrite.enabled
+    hyde_enabled = runtime.settings.legal_assistant.hyde.enabled
+    hyde_only = bool(state.get("hypothetical_answer")) and hyde_enabled and not rewrite_enabled
+    if hyde_only:
         categories = available_categories or state.get("categories") or ["default"]
         state["categories"] = categories
         state["per_category"] = False
@@ -174,25 +204,52 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
             "completed",
             "HyDE tìm trên toàn bộ category",
             elapsed_ms=_elapsed_ms(started),
-            metadata={"category_count": len(categories), "top_k": settings.hyde_top_k},
+            metadata={"category_count": len(categories), "top_k": settings.hyde_top_k, "mode": mode},
         )
         return state
 
-    query = state.get("retrieval_question") or state["question"]
+    query = state.get("rewritten_question") or state["question"]
     categories = state.get("categories") or ["default"]
     error: str | None = None
     if available_categories and runtime.llm is not None:
         try:
-            raw = await runtime.llm.ainvoke(build_category_prompt(query, available_categories))
+            system_prompt, human_prompt = build_category_messages(query, available_categories)
+            raw = await _invoke_prompt_messages(runtime, system_prompt, human_prompt)
             categories = _parse_categories(raw, available_categories) or categories
         except Exception as exc:  # pragma: no cover
             error = str(exc)
             state.setdefault("debug", {})["category_error"] = error
 
     state["categories"] = categories
+    if rewrite_enabled and hyde_enabled:
+        category_answers, hyde_errors = await _build_category_hypothetical_answers(runtime, state, categories)
+        if category_answers:
+            state["category_hypothetical_answers"] = category_answers
+            state["per_category"] = True
+            state["retrieval_top_k"] = settings.hyde_top_k
+            state.setdefault("tool_calls", []).append(
+                {"name": "category_hyde", "provider": "llm", "result": category_answers, "errors": hyde_errors}
+            )
+            await emit_progress(
+                "categories",
+                "warning" if error or hyde_errors else "completed",
+                "Đã chọn category và sinh HyDE theo từng category",
+                elapsed_ms=_elapsed_ms(started),
+                detail=("; ".join([item for item in [error, *hyde_errors] if item])) or None,
+                metadata={
+                    "categories": categories,
+                    "category_count": len(categories),
+                    "hyde_top_k_per_category": settings.hyde_top_k,
+                    "category_hyde_count": len(category_answers),
+                },
+            )
+            return state
+
     state["per_category"] = True
     state["retrieval_top_k"] = (
-        settings.top_k_when_le_2_categories if len(categories) <= 2 else settings.top_k_when_many_categories
+        settings.top_k_when_le_threshold_categories
+        if len(categories) <= settings.many_category_threshold
+        else settings.top_k_when_many_categories
     )
     state.setdefault("tool_calls", []).append(
         {"name": "classify_categories", "provider": "llm" if available_categories and runtime.llm else "config", "result": categories}
@@ -203,7 +260,12 @@ async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> 
         "Đã chọn category" if not error else "Phân loại category lỗi, dùng category fallback",
         elapsed_ms=_elapsed_ms(started),
         detail=error,
-        metadata={"categories": categories, "top_k_per_category": state["retrieval_top_k"]},
+        metadata={
+            "categories": categories,
+            "category_count": len(categories),
+            "many_category_threshold": settings.many_category_threshold,
+            "top_k_per_category": state["retrieval_top_k"],
+        },
     )
     return state
 
@@ -225,14 +287,25 @@ async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssist
         )
         return state
 
-    query = RetrievalQuery(
-        question=state.get("retrieval_question") or state["question"],
-        original_question=state["question"],
-        query_variants=state.get("query_variants", [state["question"]]),
-        categories=state.get("categories") or ["default"],
-        top_k=state.get("retrieval_top_k") or 3,
-        per_category=state.get("per_category", False),
-    )
+    category_hydes = state.get("category_hypothetical_answers") or {}
+    if category_hydes:
+        query = RetrievalQuery(
+            question=state.get("retrieval_question") or state["question"],
+            original_question=state["question"],
+            query_variants=state.get("query_variants", [state["question"]]),
+            categories=list(category_hydes),
+            top_k=runtime.settings.legal_assistant.categories.hyde_top_k,
+            per_category=True,
+        )
+    else:
+        query = RetrievalQuery(
+            question=state.get("retrieval_question") or state["question"],
+            original_question=state["question"],
+            query_variants=state.get("query_variants", [state["question"]]),
+            categories=state.get("categories") or ["default"],
+            top_k=state.get("retrieval_top_k") or 3,
+            per_category=state.get("per_category", False),
+        )
     search_mode = runtime.settings.legal_assistant.vector_store.mode
     await emit_progress(
         "retrieval",
@@ -245,7 +318,10 @@ async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssist
     try:
         # Retrieval là code đồng bộ và có thể nặng; chạy trong thread để SSE
         # heartbeat vẫn tiếp tục báo thời gian chờ cho UI.
-        candidates = await asyncio.to_thread(search_legal_articles, query, runtime.registry, runtime.store_factory)
+        if category_hydes:
+            candidates = await asyncio.to_thread(_search_category_hydes, runtime, state, category_hydes)
+        else:
+            candidates = await asyncio.to_thread(search_legal_articles, query, runtime.registry, runtime.store_factory)
     except Exception as exc:
         candidates = []
         error = str(exc)
@@ -342,14 +418,12 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _set_retrieval_text(runtime: Any, state: LegalAssistantState, retrieval_text: str, mode: str, provider: str):
+    """Cập nhật query retrieval khi không cần gọi LLM rewrite/HyDE."""
+
     question = state["question"]
     state["retrieval_mode"] = mode
     state["retrieval_question"] = retrieval_text
-    if mode == "rewrite":
-        state["rewritten_question"] = retrieval_text
-    elif mode == "hyde":
-        state["hypothetical_answer"] = retrieval_text
-    state["query_variants"] = _build_query_variants(runtime, question, retrieval_text)
+    state["query_variants"] = _build_query_variants(runtime, question, retrieval_text, None)
     state.setdefault("tool_calls", []).append(
         {"name": "prepare_retrieval_query", "provider": provider, "args": {"mode": mode}, "result": retrieval_text}
     )
@@ -357,6 +431,8 @@ def _set_retrieval_text(runtime: Any, state: LegalAssistantState, retrieval_text
 
 
 def _parse_categories(raw: str, allowed: list[str]) -> list[str]:
+    """Parse JSON/list text từ LLM và chỉ giữ category có trong law_names.json."""
+
     text = raw.strip()
     try:
         value = json.loads(text)
@@ -372,16 +448,111 @@ def _parse_categories(raw: str, allowed: list[str]) -> list[str]:
     return output
 
 
+def _prompt_messages(system_prompt: str, human_prompt: str) -> list[Any] | str:
+    """Tạo messages đúng role; fallback về plain text nếu thiếu LangChain."""
+
+    if SystemMessage is None or HumanMessage is None:
+        return f"system: {system_prompt}\n\nhuman: {human_prompt}"
+    return [SystemMessage(content=system_prompt), HumanMessage(content=human_prompt)]
+
+
+async def _invoke_prompt_messages(runtime: Any, system_prompt: str, human_prompt: str) -> str:
+    """Gọi LLM cho các node nội bộ bằng SystemMessage/HumanMessage."""
+
+    messages = _prompt_messages(system_prompt, human_prompt)
+    if isinstance(messages, str):
+        return await runtime.llm.ainvoke(messages)
+    if hasattr(runtime.llm, "ainvoke_messages"):
+        return await runtime.llm.ainvoke_messages(messages)
+    return await runtime.llm.ainvoke(_messages_to_prompt(messages))
+
+
+async def _build_category_hypothetical_answers(
+    runtime: Any,
+    state: LegalAssistantState,
+    categories: list[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Sinh HyDE riêng cho từng category sau khi đã classify category."""
+
+    output: dict[str, str] = {}
+    errors: list[str] = []
+    base_query = state.get("rewritten_question") or state["question"]
+    for category in categories:
+        category_question = f"{base_query}\nCategory cần tra cứu: {category}"
+        try:
+            system_prompt, human_prompt = build_hyde_messages(category_question)
+            answer = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip()
+            output[category] = _clean_retrieval_text(answer, "hyde") or base_query
+        except Exception as exc:  # pragma: no cover
+            errors.append(f"{category}: {exc}")
+    return output, errors
+
+
+def _search_category_hydes(
+    runtime: Any,
+    state: LegalAssistantState,
+    category_hydes: dict[str, str],
+) -> list[RetrievedCandidate]:
+    """Search từng category bằng hypothetical answer riêng rồi merge kết quả."""
+
+    results: list[RetrievedCandidate] = []
+    original_question = state["question"]
+    base_variants = state.get("query_variants", [original_question])
+    top_k = runtime.settings.legal_assistant.categories.hyde_top_k
+    for category, hyde_answer in category_hydes.items():
+        variants = []
+        for item in [hyde_answer, *base_variants, original_question]:
+            if item and item not in variants:
+                variants.append(item)
+        query = RetrievalQuery(
+            question=hyde_answer,
+            original_question=original_question,
+            query_variants=variants,
+            categories=[category],
+            top_k=top_k,
+            per_category=True,
+        )
+        results.extend(search_legal_articles(query, runtime.registry, runtime.store_factory))
+    return _dedupe_candidates(results)
+
+
+def _dedupe_candidates(candidates: list[RetrievedCandidate]) -> list[RetrievedCandidate]:
+    """Bỏ trùng article_id, giữ candidate score cao nhất."""
+
+    best = {}
+    for candidate in candidates:
+        article_id = candidate.article.article_id
+        current = best.get(article_id)
+        if current is None or candidate.score > current.score:
+            best[article_id] = candidate
+    return sorted(best.values(), key=lambda item: item.score, reverse=True)
+
+
 def _clean_retrieval_text(text: str, mode: str) -> str:
     return text.splitlines()[0].strip(" -\t") if mode == "rewrite" else text.strip()
 
 
-def _build_query_variants(runtime: Any, question: str, retrieval_text: str) -> list[str]:
+def _retrieval_mode(rewrite_enabled: bool, hyde_enabled: bool) -> str:
+    if rewrite_enabled and hyde_enabled:
+        return "rewrite+hyde"
+    if rewrite_enabled:
+        return "rewrite"
+    if hyde_enabled:
+        return "hyde"
+    return "none"
+
+
+def _build_query_variants(
+    runtime: Any,
+    question: str,
+    rewritten_question: str | None,
+    hypothetical_answer: str | None,
+) -> list[str]:
     variants: list[str] = []
-    for item in [retrieval_text, question]:
+    for item in [hypothetical_answer, rewritten_question, question]:
         if item and item not in variants:
             variants.append(item)
-    return variants[: runtime.settings.legal_assistant.query_rewrite.max_variants]
+    return variants[: runtime.settings.legal_assistant.rewrite.max_variants]
 
 
 async def _chat_answer(runtime: Any, state: LegalAssistantState, articles: list[LegalArticle] | None) -> str:

@@ -314,7 +314,13 @@ def _register_runtime_stores(
             assert chroma_store is not None
             registry.register(
                 category,
-                HybridLegalStore(lexical_store, chroma_store, rrf_k=vector.rrf_k),
+                HybridLegalStore(
+                    lexical_store,
+                    chroma_store,
+                    rrf_k=vector.rrf_k,
+                    dense_weight=vector.dense_weight,
+                    bm25_weight=vector.bm25_weight,
+                ),
             )
 
 
