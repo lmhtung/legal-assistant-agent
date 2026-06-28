@@ -48,8 +48,7 @@ Record chuẩn:
   "article": "Điều 1",
   "article_title": "Phạm vi điều chỉnh",
   "content": "...",
-  "author": "Quốc hội",
-  "category": "luat_bao_hiem_xa_hoi"
+  "author": "Quốc hội"
 }
 ```
 
@@ -69,13 +68,13 @@ sequenceDiagram
     participant C as Chroma
 
     B->>P: đọc records
-    P-->>B: records theo category
+    P-->>B: legal records
     B->>M: kiểm tra source/model/count
     alt index hợp lệ
         M-->>B: reuse
     else cần rebuild
         B->>C: xóa legal collections cũ
-        loop từng category và batch
+        loop từng retrieval store và batch
             B->>E: embed vector_text
             E-->>B: vectors
             B->>C: upsert vectors + metadata
@@ -88,17 +87,15 @@ sequenceDiagram
 Text embedding duy nhất:
 
 ```text
-{law_name}
-{article_title}
-{content}
+{article_title}:{content}
 ```
 
 Manifest `chroma_db/legal_index_manifest.json` lưu:
 
-- PostgreSQL host, port, database, table và category column;
+- PostgreSQL host, port, database, table và batch size;
 - embedding endpoint và model;
 - format vector text;
-- số record của từng category.
+- số record của từng retrieval store.
 
 Vì vậy lần chạy sau không embedding lại nếu index còn hợp lệ. Khi port/source,
 số record hoặc embedding model thay đổi, hệ thống rebuild để bảo đảm nhất quán.
@@ -118,24 +115,30 @@ embeddings:
 Tokenizer được thực thi bởi cùng embedding server/model. Không có tokenizer
 embedding thứ hai trong backend. `bm25_tokenizer` chỉ phục vụ nhánh keyword.
 
-## 6. Category và hybrid retrieval
+## 6. Global retrieval và hybrid search
 
-Mỗi category có một collection Chroma:
+Agent không còn dùng LLM để phân loại category. Khi query cần retrieval, backend luôn search global `top_k` trên retrieval store đã được nạp khi startup.
 
 ```text
-legal_articles_luat_bao_hiem_xa_hoi
-legal_articles_luat_dau_thau
-...
+query -> Chroma/BM25 store -> global rank -> top_k candidates -> reranker threshold -> final context
 ```
 
-Khi `mode: hybrid`, startup nạp cùng legal records vào BM25. Search chạy song
-song hai nhánh và hợp nhất rank bằng RRF:
+Khi `mode: hybrid`, startup nạp cùng legal records vào BM25. Search chạy song song hai nhánh và hợp nhất rank bằng RRF:
 
 ```text
 query -> BM25 rank ----+
-                       +-> RRF -> candidates
+                       +-> RRF -> top_k candidates
 query -> Chroma rank --+
 ```
+
+Dataset/PostgreSQL không còn dùng trường `category`; Chroma/BM25 được build thành một retrieval store global.
+
+## 6.1. Reranker
+
+Reranker là một service scoring, không phải agent riêng. Sau retrieval, backend gọi
+Qwen3 reranker với `query=retrieval_question`, `documents=[law_name\\narticle_title:content, ...]` và `top_n=len(documents)`. Những điều
+luật có score nhỏ hơn `legal_assistant.reranker.threshold` bị loại khỏi context cuối.
+Score reranker có thể âm nên threshold không bị giới hạn dương.
 
 ## 7. Workflow chat
 
@@ -144,8 +147,7 @@ flowchart TD
     Q[User question] --> Intent[Analyze intent]
     Intent -->|SKIP| General[General LLM answer]
     Intent -->|NEXT| Prepare[none / rewrite / hyde]
-    Prepare --> Category[Classify categories]
-    Category --> Search[Hybrid search]
+    Prepare --> Search[Global top-k retrieval]
     Search --> Context[Legal context + metadata]
     Context --> Answer[Grounded legal answer]
     General --> Output[API response]
@@ -155,8 +157,7 @@ flowchart TD
 - `none`: search bằng query gốc.
 - `rewrite`: LLM làm rõ query pháp luật trước search.
 - `hyde`: LLM sinh câu trả lời giả định ngắn rồi search bằng đoạn đó.
-- non-HyDE: category ít thì lấy top-2/category; category nhiều thì top-1/category.
-- HyDE: lấy top-3 vector candidates.
+- Retrieval luôn lấy global `vector_store.top_k` candidates trên toàn bộ stores đã nạp.
 
 ## 8. Short-term memory
 
@@ -172,7 +173,6 @@ legal_assistant:
     enabled: true
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
     table_name: legal_knowledge_records
-    category_column: category
     batch_size: 128
   rewrite:
     enabled: true
@@ -190,9 +190,9 @@ legal_assistant:
 ```text
 PostgreSQL: dữ liệu luật chuẩn
 Index builder: validate, build/reuse Chroma, preload BM25
-Backend tool: search theo category
+Backend tool: global top-k retrieval
 Agent: hiểu query và tổng hợp câu trả lời
-LLM: intent, rewrite/HyDE, category, answer
+LLM: intent, rewrite/HyDE, answer
 UI: quản lý trải nghiệm từng đoạn chat
 ```
 

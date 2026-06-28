@@ -1,58 +1,7 @@
 """Prompt tối giản cho legal assistant."""
 from __future__ import annotations
 
-import json
-import re
-import unicodedata
-from functools import lru_cache
-from pathlib import Path
-
 from src.schemas.legal import LegalArticle
-
-CATEGORY_FILE = Path(__file__).resolve().parents[4] / "src" / "categories" / "law_names.json"
-
-
-def slugify_law_name(name: str) -> str:
-    """Chuyển tên luật tiếng Việt thành category slug ổn định."""
-
-    value = unicodedata.normalize("NFD", name.lower())
-    value = "".join(char for char in value if unicodedata.category(char) != "Mn")
-    value = value.replace("đ", "d")
-    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
-    return value or "default"
-
-
-def describe_law_category(name: str) -> str:
-    """Tạo mô tả ngắn khoảng 15 từ cho từng category luật."""
-
-    return f"Nhóm quy định về {name.lower()}, gồm phạm vi áp dụng, thủ tục, quyền và nghĩa vụ."
-
-
-@lru_cache(maxsize=1)
-def load_law_categories() -> list[dict[str, str]]:
-    """Đọc law_names.json và tạo category slug + mô tả cho prompt phân loại."""
-
-    try:
-        names = json.loads(CATEGORY_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        names = []
-    output: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for name in names:
-        if not isinstance(name, str) or not name.strip():
-            continue
-        slug = slugify_law_name(name)
-        if slug in seen:
-            continue
-        seen.add(slug)
-        output.append({"slug": slug, "name": name.strip(), "description": describe_law_category(name.strip())})
-    return output
-
-
-def default_law_category_slugs() -> list[str]:
-    """Danh sách category mặc định sinh từ backend/categories/law_names.json."""
-
-    return [item["slug"] for item in load_law_categories()]
 
 SYSTEM_PROMPT = """Bạn là MscAI, trợ lý AI hỗ trợ tra cứu và giải thích pháp luật Việt Nam cho doanh nghiệp nhỏ và vừa.
 
@@ -66,7 +15,7 @@ Nguyên tắc:
 - Nếu người dùng hỏi vấn đề pháp lý, chỉ kết luận dựa trên căn cứ pháp lý được cung cấp trong hội thoại hiện tại.
 - Nếu chưa có căn cứ pháp lý phù hợp, nói rõ rằng bạn chưa có đủ dữ liệu để kết luận; không tự bịa điều luật, thủ tục, điều kiện hoặc mức phạt.
 - Khi có căn cứ, nêu điều luật/văn bản liên quan trong câu trả lời.
-- Phải trả lời cho người dùng đầy đủ nội dung các luật mà bạn nhận được một cách ngắn gọn.
+- Phải trả lời cho người dùng đầy đủ nội dung các luật mà bạn nhận được.
 """
 
 INTENT_SYSTEM_PROMPT = """Bạn là bộ phân tích ý định cho legal RAG.
@@ -82,14 +31,34 @@ INTENT_USER_PROMPT = """Câu hỏi: {question}"""
 REWRITE_QUERY_SYSTEM_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
 
 Ngữ cảnh mặc định:
-- Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
 
-Hãy viết lại câu hỏi thành một truy vấn pháp lý ngắn gọn, rõ ý, đúng thuật ngữ pháp luật, phù hợp để embedding/search.
-Giữ nguyên dữ kiện quan trọng nếu có: số tiền, thời hạn, ngày tháng, loại hợp đồng, loại doanh nghiệp, ngành nghề, địa phương, hành vi vi phạm.
-Bổ sung ngữ cảnh "doanh nghiệp nhỏ và vừa" khi câu hỏi liên quan đến cơ sở, công ty, doanh nghiệp, hộ kinh doanh hoặc hoạt động kinh doanh.
-Không thêm dữ kiện pháp lý cụ thể chưa có trong câu hỏi. Không kết luận pháp lý.
+* Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
+* Ngoài tư cách doanh nghiệp nhỏ và vừa, hãy bổ sung vai trò pháp lý phù hợp với ngữ cảnh nếu có thể suy ra trực tiếp từ câu hỏi.
 
-Chỉ trả về truy vấn đã viết lại. Không giải thích.
+Nhiệm vụ:
+Viết lại câu hỏi thành một truy vấn pháp lý ngắn gọn, rõ ý, đúng thuật ngữ pháp luật, phù hợp để embedding/search điều luật.
+
+Quy tắc viết lại:
+
+1. Giữ nguyên dữ kiện quan trọng nếu có: số tiền, thời hạn, ngày tháng, loại hợp đồng, loại doanh nghiệp, ngành nghề, địa phương, hành vi vi phạm, loại thuế, loại bảo hiểm, loại giấy phép, loại thủ tục.
+2. Khi câu hỏi nhắc đến cơ sở, công ty, doanh nghiệp, hộ kinh doanh hoặc hoạt động kinh doanh, hãy bổ sung ngữ cảnh "doanh nghiệp nhỏ và vừa".
+3. Nếu ngữ cảnh cho thấy vai trò pháp lý cụ thể, hãy bổ sung vai trò đó vào truy vấn:
+   * Lao động, hợp đồng lao động, lương, bằng cấp, bảo hiểm xã hội, sa thải, nghỉ việc → "người sử dụng lao động".
+   * Đấu thầu, gói thầu, hồ sơ dự thầu, nhà thầu → "nhà thầu là doanh nghiệp nhỏ và vừa".
+   * Đất đai, thuê đất, tiền sử dụng đất, mặt bằng sản xuất → "người sử dụng đất" hoặc "bên thuê mặt bằng".
+   * Đăng ký kinh doanh, chuyển đổi hộ kinh doanh, giấy chứng nhận đăng ký doanh nghiệp → "hộ kinh doanh chuyển đổi thành doanh nghiệp nhỏ và vừa".
+   * Vay vốn, quỹ phát triển, hỗ trợ lãi suất, bảo lãnh tín dụng → "doanh nghiệp nhỏ và vừa vay vốn hoặc nhận hỗ trợ tài chính".
+4. Chỉ bổ sung vai trò pháp lý khi vai trò đó được suy ra rõ từ nội dung câu hỏi; không suy diễn quá xa.
+5. Không thêm tên luật, số điều, mức phạt, điều kiện pháp lý hoặc kết luận pháp lý nếu câu hỏi chưa nêu.
+6. Không trả lời câu hỏi, không giải thích, không liệt kê căn cứ pháp lý.
+7. Chỉ trả về một truy vấn đã viết lại, không thêm bất kỳ nội dung nào khác.
+
+Đầu vào:
+{question}
+
+Đầu ra:
+{rewritten_query}
+
 """
 
 REWRITE_QUERY_USER_PROMPT = """Câu hỏi: {question}"""
@@ -109,30 +78,6 @@ Chỉ trả về đoạn hypothetical answer. Không giải thích.
 
 HYDE_USER_PROMPT = """Câu hỏi: {question}"""
 
-CATEGORY_SYSTEM_PROMPT = """Bạn là bộ phân loại category luật cho legal RAG dành cho doanh nghiệp nhỏ và vừa.
-
-Ngữ cảnh mặc định:
-- Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong truy vấn đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi truy vấn nói rõ khác.
-- Nếu truy vấn liên quan đến hỗ trợ, ưu đãi, vay vốn, chuyển đổi số, đào tạo, tư vấn, mặt bằng sản xuất, thuế, kế toán, khởi nghiệp, đổi mới sáng tạo của công ty/cơ sở/doanh nghiệp, hãy ưu tiên category liên quan đến hỗ trợ doanh nghiệp nhỏ và vừa nếu có trong danh sách.
-
-Dựa trên câu hỏi/truy vấn, chọn các category pháp luật liên quan nhất từ danh sách cho sẵn.
-Chỉ được chọn category_slug có trong danh sách.
-Không tự tạo category mới.
-Không giải thích.
-
-Output bắt buộc là JSON array hợp lệ.
-Ví dụ: ["luat_ho_tro_doanh_nghiep_nho_va_vua", "luat_doanh_nghiep"]
-
-Nếu truy vấn không đủ thông tin để phân loại hoặc không liên quan category nào, trả về [].
-Nếu có liên quan nhưng không chắc, trả về tối đa 3 category có khả năng nhất.
-"""
-
-CATEGORY_USER_PROMPT = """Danh sách category:
-{categories}
-
-Truy vấn: {query}"""
-
-
 def build_intent_messages(question: str) -> tuple[str, str]:
     """Tạo system/user message cho bước intent."""
 
@@ -151,28 +96,6 @@ def build_hyde_messages(question: str) -> tuple[str, str]:
     return HYDE_SYSTEM_PROMPT, HYDE_USER_PROMPT.format(question=question)
 
 
-def _short_name(name: str, max_chars: int = 70) -> str:
-    value = " ".join(name.split())
-    return value if len(value) <= max_chars else value[:max_chars].rstrip() + "..."
-
-
-def _category_lines(categories: list[str] | None = None) -> str:
-    requested = categories or default_law_category_slugs()
-    known = {item["slug"]: item for item in load_law_categories()}
-    lines = []
-    for slug in requested:
-        item = known.get(slug)
-        name = _short_name(item["name"]) if item else slug
-        lines.append(f"- {slug} | {name}")
-    return "\n".join(lines)
-
-
-def build_category_messages(query: str, categories: list[str] | None = None) -> tuple[str, str]:
-    """Tạo system/user message cho bước phân loại category luật."""
-
-    return CATEGORY_SYSTEM_PROMPT, CATEGORY_USER_PROMPT.format(query=query, categories=_category_lines(categories))
-
-
 def format_article_context(articles: list[LegalArticle]) -> str:
     """Đổi danh sách điều luật thành context nội bộ đưa vào lượt trả lời."""
 
@@ -182,7 +105,6 @@ def format_article_context(articles: list[LegalArticle]) -> str:
     blocks: list[str] = []
     for index, article in enumerate(articles, start=1):
         title = f" - {article.article_title}" if article.article_title else ""
-        category = f"Category: {article.category}" if article.category else "Category: default"
         author = f"Cơ quan ban hành: {article.author}" if article.author else "Cơ quan ban hành: N/A"
         related = ", ".join(sorted(article.extra)) if article.extra else "N/A"
         blocks.append(
@@ -190,7 +112,6 @@ def format_article_context(articles: list[LegalArticle]) -> str:
                 [
                     f"[{index}] {article.law_id}|{article.law_name}|{article.article}{title}",
                     f"Loại văn bản: {article.doc_type}",
-                    category,
                     author,
                     f"Điều luật liên quan: {related}",
                     article.content.strip(),

@@ -99,8 +99,9 @@ async def run() -> None:
     try:
         print("[competition] initializing legal index...")
         await initialize_legal_index(settings)
-        llm = LLMClient() if settings.legal_assistant.query_rewrite.use_llm else None
-        agent = LegalAssistantAgent(llm=llm)
+        # Competition luôn cần LLM cho bước tổng hợp câu trả lời.
+        # Rewrite/HyDE nếu bật trong config.yaml cũng dùng chung client này.
+        agent = LegalAssistantAgent(llm=LLMClient())
 
         async def run_one(index: int, item: LegalAnswerRequest) -> None:
             async with semaphore:

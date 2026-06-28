@@ -14,7 +14,7 @@ Launcher đọc:
 ```yaml
 app:
   host: 0.0.0.0
-  port: 8025
+  port: 8000
 ```
 
 ## PostgreSQL và dataset
@@ -27,7 +27,7 @@ app:
 uv run python scripts/load_postgres.py --truncate
 ```
 
-Dataset mặc định là `src/categories/crawled_articles_category.json`.
+Dataset mặc định là `data/base_data.json`.
 
 ## Competition mode
 
@@ -76,8 +76,8 @@ Script ghi `competition_<run_id>_running.json` sau mỗi câu, và luôn ghi
 Khi startup, backend:
 
 1. đọc PostgreSQL;
-2. nhóm record theo category;
-3. embed `law_name + "\n" + article_title + "\n" + content`;
+2. nạp records vào các retrieval stores nội bộ;
+3. embed `law_name + "\\n" + article_title + ":" + content`;
 4. build/reuse Chroma;
 5. nạp BM25 từ cache nếu mode là `bm25` hoặc `hybrid`;
 6. nếu cache BM25 chưa có hoặc lệch config/data thì tokenize và ghi cache một lần;
@@ -98,3 +98,21 @@ Dùng wrapper từ root:
 
 Backend container mount trực tiếp `backend/config.yaml` và dùng host network, do
 đó LLM, embedding và PostgreSQL URL trong YAML không bị Compose ghi đè.
+
+
+### Reranker
+
+Nếu `legal_assistant.reranker.enabled=true`, backend gọi Qwen3 reranker sau retrieval qua `POST /v1/rerank`.
+Reranker chấm từng điều luật bằng `retrieval_question` hiện tại, tức là câu hỏi đã
+rewrite hoặc HyDE answer tùy config. Candidate có score nhỏ hơn `threshold` bị loại
+trước khi đưa context vào LLM. Score có thể âm, nên threshold được để dạng float tự do.
+
+## Retrieval runtime
+
+Agent không còn dùng LLM để phân loại category. Mỗi request luôn search global `top_k` trên retrieval store đã được nạp khi startup.
+
+```text
+question -> intent -> rewrite/HyDE -> global search top_k -> rerank threshold -> answer -> output
+```
+
+Dataset/PostgreSQL không còn dùng trường `category`; index Chroma/BM25 được build thành một retrieval store global.

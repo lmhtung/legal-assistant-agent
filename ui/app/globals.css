@@ -55,6 +55,12 @@ button { color: inherit; background: none; border: 0; cursor: pointer; }
 .traceTitleRow small { color: #8f9097; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .traceStep strong { display: block; color: #f2f2f3; font-size: 13px; line-height: 1.25; }
 .traceStep p { margin: 2px 0 0; color: #bfc0c6; line-height: 1.4; overflow-wrap: anywhere; }
+.retrievalTopList { margin-top: 8px; display: grid; gap: 7px; }
+.retrievalTopItem { border: 1px solid #2c2d32; border-radius: 8px; background: #17181b; padding: 8px 9px; display: grid; gap: 4px; }
+.retrievalTopItem strong { color: #eeeeef; font-size: 12px; line-height: 1.35; }
+.retrievalTopItem small { color: #aeb0b8; font-size: 12px; line-height: 1.35; }
+.retrievalTopMeta { display: flex; flex-wrap: wrap; gap: 5px; }
+.retrievalTopMeta span { border: 1px solid #34353b; border-radius: 999px; padding: 1px 7px; color: #c8c9cf; font-size: 11px; font-variant-numeric: tabular-nums; }
 .traceStep.running > span, .traceStep.started > span { animation: tracePulse 1.2s ease-in-out infinite; }
 .traceStep.success > span { background: #15351f; color: #89e39f; }
 .traceStep.warning > span { background: #3a3016; color: #f0cf7b; }

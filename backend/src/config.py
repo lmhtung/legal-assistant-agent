@@ -124,13 +124,16 @@ class HyDESettings(ConfigModel):
     enabled: bool = False
 
 
-class CategorySettings(ConfigModel):
-    """Cấu hình số kết quả retrieval theo category."""
+class RerankerSettings(ConfigModel):
+    """Cấu hình reranker cross-encoder chạy sau retrieval."""
 
-    many_category_threshold: int = Field(default=2, ge=1)
-    top_k_when_le_threshold_categories: int = 2
-    top_k_when_many_categories: int = 1
-    hyde_top_k: int = 3
+    enabled: bool = False
+    api_key: str = "sk-1234"
+    base_url: str = "http://localhost:8025/v1"
+    model: str = "qwen3-reranker-06b"
+    threshold: float = 0.0
+    timeout_seconds: float = Field(default=60.0, gt=0)
+    endpoint: str = "/v1/rerank"
 
 
 class PostgreSQLSettings(ConfigModel):
@@ -139,10 +142,9 @@ class PostgreSQLSettings(ConfigModel):
     enabled: bool = True
     database_url: str = "postgresql://postgres:postgres@localhost:23432/legal_assistant"
     table_name: str = "legal_knowledge_records"
-    category_column: str = "category"
     batch_size: int = Field(default=128, ge=1)
 
-    @field_validator("table_name", "category_column")
+    @field_validator("table_name")
     @classmethod
     def validate_identifier(cls, value: str) -> str:
         """Chỉ chấp nhận identifier SQL đơn giản từ file cấu hình."""
@@ -189,7 +191,7 @@ class LegalAssistantSettings(ConfigModel):
     competition: CompetitionSettings = Field(default_factory=CompetitionSettings)
     rewrite: RewriteSettings = Field(default_factory=RewriteSettings)
     hyde: HyDESettings = Field(default_factory=HyDESettings)
-    categories: CategorySettings = Field(default_factory=CategorySettings)
+    reranker: RerankerSettings = Field(default_factory=RerankerSettings)
     postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
 

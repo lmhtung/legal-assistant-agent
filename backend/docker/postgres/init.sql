@@ -8,12 +8,8 @@ CREATE TABLE IF NOT EXISTS legal_knowledge_records (
     article_title TEXT NOT NULL,
     content TEXT NOT NULL,
     author TEXT NOT NULL,
-    category TEXT NOT NULL,
     extra JSONB NOT NULL DEFAULT '[]'::jsonb
 );
-
-CREATE INDEX IF NOT EXISTS idx_legal_knowledge_category
-    ON legal_knowledge_records (category);
 
 CREATE INDEX IF NOT EXISTS idx_legal_knowledge_reference
     ON legal_knowledge_records (law_id, article);

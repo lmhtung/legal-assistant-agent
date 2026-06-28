@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from time import perf_counter
 from typing import Any
 
@@ -16,16 +15,15 @@ except ImportError:  # pragma: no cover
 from src.schemas.legal import LegalArticle, RetrievalQuery, RetrievedCandidate
 from src.services.agents.legal_assistant.prompt import (
     SYSTEM_PROMPT,
-    build_category_messages,
     build_hyde_messages,
     build_intent_messages,
     build_legal_context_message,
     build_rewrite_query_messages,
-    default_law_category_slugs,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
 from src.services.agents.legal_assistant.tools import search_legal_articles
 from src.services.agents.progress import emit_progress, emit_token, has_progress_callback
+from src.services.reranker.client import get_reranker_client
 
 
 async def analyze_intent_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
@@ -130,7 +128,7 @@ async def prepare_retrieval_query_node(runtime: Any, state: LegalAssistantState)
             errors.append(f"rewrite: {exc}")
             state.setdefault("debug", {})["rewrite_error"] = str(exc)
 
-    if runtime.llm is not None and hyde_enabled and not rewrite_enabled:
+    if runtime.llm is not None and hyde_enabled:
         try:
             system_prompt, human_prompt = build_hyde_messages(question)
             candidate = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip()
@@ -168,110 +166,8 @@ async def prepare_retrieval_query_node(runtime: Any, state: LegalAssistantState)
     return state
 
 
-async def classify_categories_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
-    """Bước 3 non-HyDE: phân tích query thuộc category luật nào."""
-
-    started = perf_counter()
-    await emit_progress(
-        "categories",
-        "started",
-        "Đang xác định các category pháp luật cần tìm",
-        detail="LLM chọn category từ law_names.json.",
-    )
-    if state.get("skip_retrieval"):
-        await emit_progress(
-            "categories",
-            "completed",
-            "Bỏ qua phân loại category",
-            elapsed_ms=_elapsed_ms(started),
-            detail="Intent là SKIP.",
-        )
-        return state
-
-    settings = runtime.settings.legal_assistant.categories
-    available_categories = default_law_category_slugs()
-    mode = state.get("retrieval_mode")
-    rewrite_enabled = runtime.settings.legal_assistant.rewrite.enabled
-    hyde_enabled = runtime.settings.legal_assistant.hyde.enabled
-    hyde_only = bool(state.get("hypothetical_answer")) and hyde_enabled and not rewrite_enabled
-    if hyde_only:
-        categories = available_categories or state.get("categories") or ["default"]
-        state["categories"] = categories
-        state["per_category"] = False
-        state["retrieval_top_k"] = settings.hyde_top_k
-        await emit_progress(
-            "categories",
-            "completed",
-            "HyDE tìm trên toàn bộ category",
-            elapsed_ms=_elapsed_ms(started),
-            metadata={"category_count": len(categories), "top_k": settings.hyde_top_k, "mode": mode},
-        )
-        return state
-
-    query = state.get("rewritten_question") or state["question"]
-    categories = state.get("categories") or ["default"]
-    error: str | None = None
-    if available_categories and runtime.llm is not None:
-        try:
-            system_prompt, human_prompt = build_category_messages(query, available_categories)
-            raw = await _invoke_prompt_messages(runtime, system_prompt, human_prompt)
-            categories = _parse_categories(raw, available_categories) or categories
-        except Exception as exc:  # pragma: no cover
-            error = str(exc)
-            state.setdefault("debug", {})["category_error"] = error
-
-    state["categories"] = categories
-    if rewrite_enabled and hyde_enabled:
-        category_answers, hyde_errors = await _build_category_hypothetical_answers(runtime, state, categories)
-        if category_answers:
-            state["category_hypothetical_answers"] = category_answers
-            state["per_category"] = True
-            state["retrieval_top_k"] = settings.hyde_top_k
-            state.setdefault("tool_calls", []).append(
-                {"name": "category_hyde", "provider": "llm", "result": category_answers, "errors": hyde_errors}
-            )
-            await emit_progress(
-                "categories",
-                "warning" if error or hyde_errors else "completed",
-                "Đã chọn category và sinh HyDE theo từng category",
-                elapsed_ms=_elapsed_ms(started),
-                detail=("; ".join([item for item in [error, *hyde_errors] if item])) or None,
-                metadata={
-                    "categories": categories,
-                    "category_count": len(categories),
-                    "hyde_top_k_per_category": settings.hyde_top_k,
-                    "category_hyde_count": len(category_answers),
-                },
-            )
-            return state
-
-    state["per_category"] = True
-    state["retrieval_top_k"] = (
-        settings.top_k_when_le_threshold_categories
-        if len(categories) <= settings.many_category_threshold
-        else settings.top_k_when_many_categories
-    )
-    state.setdefault("tool_calls", []).append(
-        {"name": "classify_categories", "provider": "llm" if available_categories and runtime.llm else "config", "result": categories}
-    )
-    await emit_progress(
-        "categories",
-        "warning" if error else "completed",
-        "Đã chọn category" if not error else "Phân loại category lỗi, dùng category fallback",
-        elapsed_ms=_elapsed_ms(started),
-        detail=error,
-        metadata={
-            "categories": categories,
-            "category_count": len(categories),
-            "many_category_threshold": settings.many_category_threshold,
-            "top_k_per_category": state["retrieval_top_k"],
-        },
-    )
-    return state
-
-
 async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
-    """Bước 4: embedding/search theo category đã chọn."""
+    """Bước 3: search global top-k trên toàn bộ retrieval registry."""
 
     started = perf_counter()
     if state.get("skip_retrieval"):
@@ -287,41 +183,30 @@ async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssist
         )
         return state
 
-    category_hydes = state.get("category_hypothetical_answers") or {}
-    if category_hydes:
-        query = RetrievalQuery(
-            question=state.get("retrieval_question") or state["question"],
-            original_question=state["question"],
-            query_variants=state.get("query_variants", [state["question"]]),
-            categories=list(category_hydes),
-            top_k=runtime.settings.legal_assistant.categories.hyde_top_k,
-            per_category=True,
-        )
-    else:
-        query = RetrievalQuery(
-            question=state.get("retrieval_question") or state["question"],
-            original_question=state["question"],
-            query_variants=state.get("query_variants", [state["question"]]),
-            categories=state.get("categories") or ["default"],
-            top_k=state.get("retrieval_top_k") or 3,
-            per_category=state.get("per_category", False),
-        )
+    search_spaces = runtime.registry.list_databases() or ["default"]
+    query = RetrievalQuery(
+        question=state.get("retrieval_question") or state["question"],
+        original_question=state["question"],
+        query_variants=state.get("query_variants", [state["question"]]),
+        search_spaces=search_spaces,
+        top_k=runtime.settings.legal_assistant.vector_store.top_k,
+    )
+    state["search_spaces"] = search_spaces
+    state["retrieval_top_k"] = query.top_k
     search_mode = runtime.settings.legal_assistant.vector_store.mode
+    progress_metadata = _retrieval_progress_metadata(query, search_mode)
     await emit_progress(
         "retrieval",
         "started",
         f"Đang chạy {search_mode} search",
         detail="Embedding query, tìm Chroma/BM25 và hợp nhất RRF." if search_mode == "hybrid" else None,
-        metadata={"categories": query.categories, "top_k": query.top_k, "mode": search_mode},
+        metadata=progress_metadata,
     )
     error: str | None = None
     try:
         # Retrieval là code đồng bộ và có thể nặng; chạy trong thread để SSE
         # heartbeat vẫn tiếp tục báo thời gian chờ cho UI.
-        if category_hydes:
-            candidates = await asyncio.to_thread(_search_category_hydes, runtime, state, category_hydes)
-        else:
-            candidates = await asyncio.to_thread(search_legal_articles, query, runtime.registry, runtime.store_factory)
+        candidates = await asyncio.to_thread(search_legal_articles, query, runtime.registry, runtime.store_factory)
     except Exception as exc:
         candidates = []
         error = str(exc)
@@ -331,7 +216,7 @@ async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssist
         {
             "name": "search_legal_articles",
             "provider": "backend",
-            "args": query.model_dump(mode="json"),
+            "args": _retrieval_tool_args(query, progress_metadata),
             "num_results": len(candidates),
             "error": error,
         }
@@ -344,7 +229,101 @@ async def retrieve_node(runtime: Any, state: LegalAssistantState) -> LegalAssist
         "Retrieval lỗi" if error else f"Retrieval trả về {len(candidates)} kết quả",
         elapsed_ms=_elapsed_ms(started),
         detail=error or (None if candidates else "Không tìm thấy candidate phù hợp."),
-        metadata={"num_results": len(candidates), "mode": search_mode, "categories": query.categories},
+        metadata={
+            **progress_metadata,
+            "num_results": len(candidates),
+            "top_results": _top_retrieval_results(candidates, limit=5),
+        },
+    )
+    return state
+
+
+async def rerank_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
+    """Bước 4: dùng reranker lọc điều luật theo threshold."""
+
+    started = perf_counter()
+    settings = runtime.settings.legal_assistant.reranker
+    candidates = state.get("retrieved", [])
+    if state.get("skip_retrieval") or not candidates:
+        state["reranked"] = []
+        state["selected_articles"] = []
+        await emit_progress(
+            "rerank",
+            "completed",
+            "Bỏ qua reranker",
+            elapsed_ms=_elapsed_ms(started),
+            detail="Không có candidate retrieval để rerank.",
+            metadata={"enabled": settings.enabled, "num_candidates": len(candidates)},
+        )
+        return state
+
+    if not settings.enabled:
+        state["reranked"] = candidates
+        state["selected_articles"] = [candidate.article for candidate in candidates]
+        await emit_progress(
+            "rerank",
+            "completed",
+            "Reranker đang tắt",
+            elapsed_ms=_elapsed_ms(started),
+            detail="Dùng nguyên kết quả retrieval.",
+            metadata={"enabled": False, "num_candidates": len(candidates)},
+        )
+        return state
+
+    query = state.get("retrieval_question") or state["question"]
+    await emit_progress(
+        "rerank",
+        "started",
+        "Đang rerank các điều luật tìm được",
+        detail="Gọi Qwen3 reranker và lọc theo threshold.",
+        metadata={
+            "model": settings.model,
+            "threshold": settings.threshold,
+            "num_candidates": len(candidates),
+            "query": query,
+        },
+    )
+
+    error: str | None = None
+    scored: list[RetrievedCandidate] = []
+    try:
+        client = get_reranker_client()
+        scores = await client.score_many(query, [candidate.article for candidate in candidates])
+        for candidate, score in zip(candidates, scores):
+            scored.append(candidate.model_copy(update={"score": score, "reason": f"rerank_score={score}"}))
+        scored.sort(key=lambda item: item.score, reverse=True)
+        kept = [candidate for candidate in scored if candidate.score >= settings.threshold]
+    except Exception as exc:  # pragma: no cover - endpoint/runtime guard
+        error = str(exc)
+        state.setdefault("debug", {})["reranker_error"] = error
+        scored = candidates
+        kept = candidates
+
+    state["reranked"] = scored
+    state["selected_articles"] = [candidate.article for candidate in kept]
+    state.setdefault("tool_calls", []).append(
+        {
+            "name": "rerank_legal_articles",
+            "provider": "qwen3-reranker",
+            "args": {"model": settings.model, "threshold": settings.threshold, "query": query},
+            "num_candidates": len(candidates),
+            "num_kept": len(kept),
+            "error": error,
+        }
+    )
+    await emit_progress(
+        "rerank",
+        "warning" if error else "completed",
+        "Reranker lỗi, dùng nguyên retrieval" if error else f"Rerank giữ {len(kept)}/{len(candidates)} kết quả",
+        elapsed_ms=_elapsed_ms(started),
+        detail=error,
+        metadata={
+            "model": settings.model,
+            "threshold": settings.threshold,
+            "num_candidates": len(candidates),
+            "num_kept": len(kept),
+            "top_results": _top_rerank_results(scored, settings.threshold, limit=5),
+        },
     )
     return state
 
@@ -417,6 +396,77 @@ def _elapsed_ms(started: float) -> int:
     return round((perf_counter() - started) * 1000)
 
 
+def _retrieval_progress_metadata(query: RetrievalQuery, search_mode: str) -> dict[str, Any]:
+    """Metadata ngắn gọn cho UI; search luôn là global top-k."""
+
+    return {
+        "mode": search_mode,
+        "scope": "global",
+        "top_k": query.top_k,
+        "search_space_count": len(query.search_spaces),
+    }
+
+
+def _top_retrieval_results(candidates: list[RetrievedCandidate], limit: int = 5) -> list[dict[str, Any]]:
+    """Rút gọn top retrieval candidates để UI debug score/rank dễ đọc."""
+
+    results: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates[:limit], start=1):
+        article = candidate.article
+        score = candidate.score if candidate.score is not None else 0.0
+        results.append(
+            {
+                "rank": candidate.rank or index,
+                "score": round(float(score), 6),
+                "source": candidate.source,
+                "law_id": article.law_id,
+                "law_name": article.law_name,
+                "article": article.article,
+                "article_title": article.article_title or "",
+            }
+        )
+    return results
+
+
+def _top_rerank_results(
+    candidates: list[RetrievedCandidate],
+    threshold: float,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Rút gọn rerank candidates để UI hiển thị score và trạng thái lọc."""
+
+    results: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates[:limit], start=1):
+        article = candidate.article
+        score = candidate.score if candidate.score is not None else 0.0
+        results.append(
+            {
+                "rank": index,
+                "score": round(float(score), 6),
+                "source": candidate.source,
+                "law_id": article.law_id,
+                "law_name": article.law_name,
+                "article": article.article,
+                "article_title": article.article_title or "",
+                "passed_threshold": float(score) >= threshold,
+            }
+        )
+    return results
+
+
+def _retrieval_tool_args(query: RetrievalQuery, progress_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Args debug gọn; không trả full danh sách retrieval spaces."""
+
+    payload = query.model_dump(mode="json")
+    payload["search_spaces"] = {
+        "scope": "global",
+        "search_space_count": len(query.search_spaces),
+    }
+    payload["top_k"] = progress_metadata["top_k"]
+    payload["scope"] = progress_metadata["scope"]
+    return payload
+
+
 def _set_retrieval_text(runtime: Any, state: LegalAssistantState, retrieval_text: str, mode: str, provider: str):
     """Cập nhật query retrieval khi không cần gọi LLM rewrite/HyDE."""
 
@@ -428,24 +478,6 @@ def _set_retrieval_text(runtime: Any, state: LegalAssistantState, retrieval_text
         {"name": "prepare_retrieval_query", "provider": provider, "args": {"mode": mode}, "result": retrieval_text}
     )
     return state
-
-
-def _parse_categories(raw: str, allowed: list[str]) -> list[str]:
-    """Parse JSON/list text từ LLM và chỉ giữ category có trong law_names.json."""
-
-    text = raw.strip()
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
-        value = [item.strip(' -"') for item in text.replace("\n", ",").split(",")]
-    if isinstance(value, str):
-        value = [value]
-    allowed_set = set(allowed)
-    output: list[str] = []
-    for item in value if isinstance(value, list) else []:
-        if item in allowed_set and item not in output:
-            output.append(item)
-    return output
 
 
 def _prompt_messages(system_prompt: str, human_prompt: str) -> list[Any] | str:
@@ -465,67 +497,6 @@ async def _invoke_prompt_messages(runtime: Any, system_prompt: str, human_prompt
     if hasattr(runtime.llm, "ainvoke_messages"):
         return await runtime.llm.ainvoke_messages(messages)
     return await runtime.llm.ainvoke(_messages_to_prompt(messages))
-
-
-async def _build_category_hypothetical_answers(
-    runtime: Any,
-    state: LegalAssistantState,
-    categories: list[str],
-) -> tuple[dict[str, str], list[str]]:
-    """Sinh HyDE riêng cho từng category sau khi đã classify category."""
-
-    output: dict[str, str] = {}
-    errors: list[str] = []
-    base_query = state.get("rewritten_question") or state["question"]
-    for category in categories:
-        category_question = f"{base_query}\nCategory cần tra cứu: {category}"
-        try:
-            system_prompt, human_prompt = build_hyde_messages(category_question)
-            answer = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip()
-            output[category] = _clean_retrieval_text(answer, "hyde") or base_query
-        except Exception as exc:  # pragma: no cover
-            errors.append(f"{category}: {exc}")
-    return output, errors
-
-
-def _search_category_hydes(
-    runtime: Any,
-    state: LegalAssistantState,
-    category_hydes: dict[str, str],
-) -> list[RetrievedCandidate]:
-    """Search từng category bằng hypothetical answer riêng rồi merge kết quả."""
-
-    results: list[RetrievedCandidate] = []
-    original_question = state["question"]
-    base_variants = state.get("query_variants", [original_question])
-    top_k = runtime.settings.legal_assistant.categories.hyde_top_k
-    for category, hyde_answer in category_hydes.items():
-        variants = []
-        for item in [hyde_answer, *base_variants, original_question]:
-            if item and item not in variants:
-                variants.append(item)
-        query = RetrievalQuery(
-            question=hyde_answer,
-            original_question=original_question,
-            query_variants=variants,
-            categories=[category],
-            top_k=top_k,
-            per_category=True,
-        )
-        results.extend(search_legal_articles(query, runtime.registry, runtime.store_factory))
-    return _dedupe_candidates(results)
-
-
-def _dedupe_candidates(candidates: list[RetrievedCandidate]) -> list[RetrievedCandidate]:
-    """Bỏ trùng article_id, giữ candidate score cao nhất."""
-
-    best = {}
-    for candidate in candidates:
-        article_id = candidate.article.article_id
-        current = best.get(article_id)
-        if current is None or candidate.score > current.score:
-            best[article_id] = candidate
-    return sorted(best.values(), key=lambda item: item.score, reverse=True)
 
 
 def _clean_retrieval_text(text: str, mode: str) -> str:

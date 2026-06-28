@@ -1,6 +1,6 @@
 app:
   host: 0.0.0.0
-  port: 8025
+  port: 8023
 
 ui:
   host: 0.0.0.0
@@ -8,21 +8,21 @@ ui:
 
 llm:
   api_key: sk-1234
-  base_url: http://localhost:8017/v1
-  default_model: qwen3_5-9b
+  base_url: http://localhost:8024/v1
+  default_model: qwen3-8b-fp8
   temperature: 0.6
-  max_tokens: 2000
+  max_tokens: 3000
   enable_thinking: false
 
-embeddings:
+embeddings: 
   api_key: sk-1234
-  base_url: http://localhost:8013/v1
-  model: bge-m3
-  max_input_tokens: 8190 # cắt text embedding để không vượt context model
+  base_url: http://localhost:8026/v1 # OpenAIEmbeddings sẽ gọi POST {base_url}/embeddings
+  model: qwen3-embed-06b
+  max_input_tokens: 31950 # cắt text embedding để không vượt context model
   tokenizer_encoding: cl100k_base
 
 short_memory:
-  enabled: true
+  enabled: false
 
 
 legal_assistant:
@@ -30,34 +30,36 @@ legal_assistant:
     streaming: true # true: UI gọi /chat/stream; false: UI gọi /chat
     token_streaming: true # true: stream token LLM trong bubble chat
   competition:
-    enabled: false # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
-    max_concurrency: 8 # số câu hỏi competition chạy song song
+    enabled: true # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
+    max_concurrency: 16 # số câu hỏi competition chạy song song
     save_outputs: true # tự lưu kết quả vào output_dir khi xong hoặc lỗi
     output_dir: ./outputs
-  rewrite:
+  rewrite:       #
     enabled: false
     max_variants: 3
   hyde:
     enabled: true
-  categories:
-    many_category_threshold: 3 # số category <= threshold thì dùng top_k_when_le_threshold_categories
-    top_k_when_le_threshold_categories: 2
-    top_k_when_many_categories: 3
-    hyde_top_k: 5
+  reranker:
+    enabled: true
+    api_key: sk-1234
+    base_url: http://localhost:8025
+    model: qwen3-reranker-06b
+    endpoint: /v1/rerank
+    threshold: 0.3 # score có thể âm; tăng/giảm ngưỡng để lọc chặt/lỏng hơn            Test từ 0.3-0.9 
+    timeout_seconds: 60
   postgres:
     enabled: true
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
     table_name: legal_knowledge_records
-    category_column: category
-    batch_size: 128
+    batch_size: 256
   vector_store:
-    mode: hybrid # bm25 | chroma | hybrid
+    mode: chroma # bm25 | chroma | hybrid
+    top_k: 5
     persist_directory: ./chroma_db
     default_collection: legal_articles
     rrf_k: 60
-    dense_weight: 2.0 # trọng số Chroma/vector trong hybrid RRF
+    dense_weight: 3.0 # trọng số Chroma/vector trong hybrid RRF
     bm25_weight: 1.0 # trọng số BM25/keyword trong hybrid RRF
-    top_k: 8
     bm25_tokenizer: auto # auto | underthesea | regex
     bm25_k1: 1.2
     bm25_b: 0.65

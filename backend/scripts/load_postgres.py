@@ -16,7 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from src.config import get_settings
 
-DEFAULT_DATASET = BACKEND_ROOT / "src" / "categories" / "crawled_articles_category.json"
+DEFAULT_DATASET = BACKEND_ROOT / "data" / "base_data.json"
 REQUIRED_FIELDS = {
     "id",
     "law_id",
@@ -26,7 +26,6 @@ REQUIRED_FIELDS = {
     "article_title",
     "content",
     "author",
-    "category",
 }
 
 
@@ -76,8 +75,36 @@ def to_row(record: dict[str, Any]) -> tuple[Any, ...]:
         str(record["article_title"]),
         str(record["content"]),
         str(record["author"]),
-        str(record["category"]),
         json.dumps(extra, ensure_ascii=False),
+    )
+
+
+async def ensure_schema(conn: Any) -> None:
+    """Tạo/migrate bảng PostgreSQL sang schema không còn category."""
+
+    await conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS legal_knowledge_records (
+            id BIGINT PRIMARY KEY,
+            law_id TEXT NOT NULL,
+            law_name TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            chapter TEXT,
+            article TEXT NOT NULL,
+            article_title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            author TEXT NOT NULL,
+            extra JSONB NOT NULL DEFAULT '[]'::jsonb
+        )
+        """
+    )
+    await conn.execute("DROP INDEX IF EXISTS idx_legal_knowledge_category")
+    await conn.execute("ALTER TABLE legal_knowledge_records DROP COLUMN IF EXISTS category")
+    await conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_legal_knowledge_reference
+        ON legal_knowledge_records (law_id, article)
+        """
     )
 
 
@@ -93,15 +120,16 @@ async def import_records(args: argparse.Namespace) -> None:
     database_url = args.database_url or get_settings().legal_assistant.postgres.database_url
     conn = await asyncpg.connect(database_url)
     try:
+        await ensure_schema(conn)
         if args.truncate:
             await conn.execute("TRUNCATE TABLE legal_knowledge_records")
 
         sql = """
             INSERT INTO legal_knowledge_records (
                 id, law_id, law_name, doc_type, chapter, article,
-                article_title, content, author, category, extra
+                article_title, content, author, extra
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
             ON CONFLICT (id) DO UPDATE SET
                 law_id = EXCLUDED.law_id,
                 law_name = EXCLUDED.law_name,
@@ -111,7 +139,6 @@ async def import_records(args: argparse.Namespace) -> None:
                 article_title = EXCLUDED.article_title,
                 content = EXCLUDED.content,
                 author = EXCLUDED.author,
-                category = EXCLUDED.category,
                 extra = EXCLUDED.extra
         """
         for start in range(0, len(records), args.batch_size):
@@ -120,8 +147,7 @@ async def import_records(args: argparse.Namespace) -> None:
             print(f"Đã nạp {min(start + args.batch_size, len(records))}/{len(records)} record")
 
         total = await conn.fetchval("SELECT COUNT(*) FROM legal_knowledge_records")
-        categories = await conn.fetchval("SELECT COUNT(DISTINCT category) FROM legal_knowledge_records")
-        print(f"Hoàn tất: PostgreSQL có {total} record thuộc {categories} category")
+        print(f"Hoàn tất: PostgreSQL có {total} record")
     finally:
         await conn.close()
 

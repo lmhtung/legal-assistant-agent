@@ -70,6 +70,17 @@ export type CompetitionStreamEvent =
   | { event: "done"; data: ChatStreamProgress }
   | { event: "error"; data: ChatStreamProgress };
 
+export type RetrievalTraceResult = {
+  rank?: number;
+  score?: number;
+  source?: string;
+  law_id?: string;
+  law_name?: string;
+  article?: string;
+  article_title?: string;
+  passed_threshold?: boolean;
+};
+
 export type AgentTraceStep = {
   stage?: string;
   status?: "started" | "running" | "completed" | "warning" | "error";
@@ -77,6 +88,7 @@ export type AgentTraceStep = {
   detail: string;
   elapsedMs?: number | null;
   tone?: "info" | "success" | "warning" | "error";
+  topResults?: RetrievalTraceResult[];
 };
 
 export type ChatMessage = {

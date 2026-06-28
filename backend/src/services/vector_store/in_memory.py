@@ -44,7 +44,7 @@ def tokenizer_signature(mode: str = "auto") -> str:
 
 
 class InMemoryLegalStore:
-    """BM25 store chạy trong RAM cho từng category pháp luật.
+    """BM25 store chạy trong RAM cho corpus pháp luật.
 
     Store này index ``LegalArticle.vector_text`` và dùng BM25Okapi khi package
     ``rank_bm25`` có sẵn. Nếu dependency chưa được cài, nó fallback sang công
@@ -73,8 +73,7 @@ class InMemoryLegalStore:
         """Index text chuẩn của từng record vào BM25 corpus."""
 
         for article in articles:
-            indexed = article.model_copy(update={"category": article.category or self.database})
-            self._articles[indexed.article_id] = indexed
+            self._articles[article.article_id] = article
         self._rebuild_index()
 
     @classmethod
@@ -95,10 +94,7 @@ class InMemoryLegalStore:
         """
 
         store = cls(database=database, tokenizer=tokenizer, k1=k1, b=b, epsilon=epsilon)
-        store._articles = {
-            article.article_id: article.model_copy(update={"category": article.category or database})
-            for article in articles
-        }
+        store._articles = {article.article_id: article for article in articles}
         store._article_ids = [article.article_id for article in articles]
         store._tokenized_corpus = tokenized_corpus
         store._build_bm25_model()

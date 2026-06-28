@@ -75,7 +75,6 @@ async def chat(
             session_id=request.session_id,
             question=request.message,
             competition_mode=request.competition_mode,
-            databases=request.databases,
             top_k=request.top_k,
             include_debug=True,
         )
@@ -118,7 +117,6 @@ async def chat_stream(
             session_id=request.session_id,
             question=request.message,
             competition_mode=request.competition_mode,
-            databases=request.databases,
             top_k=request.top_k,
             include_debug=True,
         )

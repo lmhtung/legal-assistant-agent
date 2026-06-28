@@ -1,6 +1,7 @@
 """Vector retriever đọc Chroma index đã được backend/data system build sẵn."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -14,8 +15,12 @@ _NON_WORD_RE = re.compile(r"[^\w]+")
 def safe_collection_name(value: str) -> str:
     """Đổi tên database thành tên collection hợp lệ cho Chroma."""
 
+    max_length = 60
     name = _NON_WORD_RE.sub("_", value.lower()).strip("._-")
-    name = name[:60].strip("._-")
+    if len(name) > max_length:
+        suffix = hashlib.sha1(name.encode("utf-8")).hexdigest()[:10]
+        prefix = name[: max_length - len(suffix) - 1].strip("._-")
+        name = f"{prefix}_{suffix}".strip("._-")
     if len(name) < 3:
         return "legal_articles"
     return name

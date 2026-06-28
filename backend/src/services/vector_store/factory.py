@@ -10,28 +10,28 @@ from src.services.vector_store.in_memory import InMemoryLegalStore
 
 
 class VectorStoreFactory:
-    """Tạo đúng implementation vector store cho từng database logic."""
+    """Tạo đúng implementation vector store cho từng search space logic."""
 
     def __init__(self, settings: VectorStoreSettings) -> None:
         self.settings = settings
         self._embeddings: EmbeddingsClient | None = None
 
-    def create(self, database: str) -> LegalVectorStore:
+    def create(self, search_space: str) -> LegalVectorStore:
         """Tạo store theo ``legal_assistant.vector_store.mode`` trong config.yaml."""
 
         if self.settings.mode == "bm25":
-            return self._create_bm25_store(database)
+            return self._create_bm25_store(search_space)
         if self.settings.mode == "chroma":
             return ChromaLegalStore(
-                database=database,
+                database=search_space,
                 persist_directory=str(self.settings.persist_directory),
                 collection_prefix=self.settings.default_collection,
                 embeddings=self._get_embeddings(),
             )
         return HybridLegalStore(
-            lexical_store=self._create_bm25_store(database),
+            lexical_store=self._create_bm25_store(search_space),
             vector_store=ChromaLegalStore(
-                database=database,
+                database=search_space,
                 persist_directory=str(self.settings.persist_directory),
                 collection_prefix=self.settings.default_collection,
                 embeddings=self._get_embeddings(),
@@ -41,11 +41,11 @@ class VectorStoreFactory:
             bm25_weight=self.settings.bm25_weight,
         )
 
-    def _create_bm25_store(self, database: str) -> InMemoryLegalStore:
+    def _create_bm25_store(self, search_space: str) -> InMemoryLegalStore:
         """Tạo BM25 store với tokenizer/tham số lấy từ config."""
 
         return InMemoryLegalStore(
-            database=database,
+            database=search_space,
             tokenizer=self.settings.bm25_tokenizer,
             k1=self.settings.bm25_k1,
             b=self.settings.bm25_b,

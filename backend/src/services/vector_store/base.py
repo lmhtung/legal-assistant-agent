@@ -24,50 +24,45 @@ class LegalVectorStore(Protocol):
 
 
 class VectorStoreRegistry:
-    """Registry in-process map tên category sang store cụ thể."""
+    """Registry in-process map tên search space sang store cụ thể."""
 
     def __init__(self) -> None:
         self._stores: dict[str, LegalVectorStore] = {}
 
-    def register(self, category: str, store: LegalVectorStore) -> None:
-        """Đăng ký store cho một category pháp luật."""
+    def register(self, name: str, store: LegalVectorStore) -> None:
+        """Đăng ký store cho một search space nội bộ."""
 
-        self._stores[category] = store
+        self._stores[name] = store
 
-    def get(self, category: str) -> LegalVectorStore:
-        """Lấy store theo category, báo lỗi nếu chưa đăng ký."""
+    def get(self, name: str) -> LegalVectorStore:
+        """Lấy store theo tên, báo lỗi nếu chưa đăng ký."""
 
-        if category not in self._stores:
-            raise KeyError(f"Category '{category}' is not registered")
-        return self._stores[category]
+        if name not in self._stores:
+            raise KeyError(f"Search space '{name}' is not registered")
+        return self._stores[name]
 
-    def has(self, category: str) -> bool:
-        """Kiểm tra category đã có store trong process chưa."""
+    def has(self, name: str) -> bool:
+        """Kiểm tra search space đã có store trong process chưa."""
 
-        return category in self._stores
+        return name in self._stores
 
     def list_databases(self) -> list[str]:
-        """Liệt kê category đang được mở trong process hiện tại."""
+        """Liệt kê các search space đang được mở trong process hiện tại."""
 
         return sorted(self._stores)
 
     def search(self, query: RetrievalQuery) -> list[RetrievedCandidate]:
-        """Search các category được chọn và merge theo score.
-
-        Với mode non-HyDE, ``per_category=True`` nghĩa là mỗi category đã tự lấy
-        ``top_k`` kết quả, nên registry không cắt global nữa. Với HyDE hoặc search
-        thường, registry cắt global theo ``top_k``.
-        """
+        """Search global trên mọi search space và trả đúng top_k tốt nhất."""
 
         merged: list[RetrievedCandidate] = []
-        for category in query.categories:
-            if category not in self._stores:
+        for name in query.search_spaces:
+            if name not in self._stores:
                 continue
-            merged.extend(self._stores[category].search(query))
+            merged.extend(self._stores[name].search(query))
         merged.sort(key=lambda item: item.score, reverse=True)
-        return merged if query.per_category else merged[: query.top_k]
+        return merged[: query.top_k]
 
 
 # Registry dùng chung trong FastAPI process. Dữ liệu bền vững nằm ở PostgreSQL
-# và vector DB; registry chỉ giữ các object store đang mở theo category.
+# và vector DB; registry chỉ giữ các object store đang mở trong runtime.
 vector_store_registry = VectorStoreRegistry()

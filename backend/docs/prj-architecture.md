@@ -12,7 +12,7 @@ PostgreSQL Data Source -> Startup Index Builder -> Chroma + BM25
 PostgreSQL là nguồn dữ liệu luật đã được xử lý sẵn. Backend chỉ đọc dữ liệu,
 không cung cấp API thêm/sửa/xóa dataset và không xử lý PDF/OCR.
 
-Mỗi record có `category`; category được dùng để tạo collection Chroma riêng.
+Record dữ liệu không còn trường `category`; agent không chia index hoặc phân loại query theo category.
 
 ## 2. Startup Index Builder
 
@@ -22,7 +22,7 @@ Mỗi record có `category`; category được dùng để tạo collection Chro
 backend startup
 -> kết nối PostgreSQL
 -> đọc và validate records
--> nhóm theo category
+-> nạp records vào retrieval stores nội bộ
 -> kiểm tra legal_index_manifest.json
 -> build/reuse Chroma
 -> nạp BM25 vào RAM
@@ -39,7 +39,7 @@ text thay đổi.
 - BM25: lexical index trong RAM, nạp lại mỗi backend process.
 - Hybrid: merge Chroma và BM25 bằng Reciprocal Rank Fusion.
 
-Mỗi category có collection dạng `legal_articles_<category>`.
+Chroma/BM25 stores được nạp sẵn khi startup. Runtime agent luôn search global top-k trên toàn bộ stores đã đăng ký.
 
 ## 4. Agent Workflow
 
@@ -47,9 +47,8 @@ Mỗi category có collection dạng `legal_articles_<category>`.
 question
 -> analyze_intent: SKIP hoặc NEXT
 -> prepare_retrieval_query: none/rewrite/hyde
--> classify_categories
--> search_legal_articles trong backend tools.py
--> hybrid retrieval
+-> search_legal_articles global top-k trong backend tools.py
+-> chroma/bm25/hybrid retrieval
 -> grounded answer
 -> competition output
 ```

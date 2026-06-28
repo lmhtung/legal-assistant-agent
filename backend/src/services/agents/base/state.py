@@ -31,18 +31,17 @@ class AgentState(TypedDict, total=False):
     legal_flag: str
     rewritten_question: str
     hypothetical_answer: str
-    category_hypothetical_answers: dict[str, str]
     retrieval_question: str
     retrieval_mode: str
     query_variants: list[str]
-    categories: list[str]
+    search_spaces: list[str]
     skip_retrieval: bool
-    per_category: bool
     retrieval_top_k: int
     context: AgentContext
     messages: Annotated[list[BaseMessage], add_messages]
     tool_calls: list[dict[str, Any]]
     retrieved: list[RetrievedCandidate]
+    reranked: list[RetrievedCandidate]
     selected_articles: list[LegalArticle]
     answer: str
     relevant_docs: list[str]

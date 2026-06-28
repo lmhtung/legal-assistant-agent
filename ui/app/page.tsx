@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, FileUp, MessageSquarePlus, PanelLeft, Search, Send, SquarePen, Trash2 } from "lucide-react";
 import { parseSseChunk } from "@/lib/sse";
-import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, CompetitionRecord, CompetitionStreamEvent, Conversation, RuntimeConfig } from "@/lib/types";
+import type { AgentTraceStep, ChatMessage, ChatResponse, ChatStreamEvent, ChatStreamProgress, CompetitionRecord, CompetitionStreamEvent, Conversation, RetrievalTraceResult, RuntimeConfig } from "@/lib/types";
 
 const API_BASE = "/backend-api";
 const DEFAULT_DATABASE = process.env.NEXT_PUBLIC_DEFAULT_DATABASE || "default";
@@ -32,6 +32,7 @@ const STAGE_TITLES: Record<string, string> = {
   prepare_query: "Chuẩn bị truy vấn",
   categories: "Phân loại category",
   retrieval: "Retrieval",
+  rerank: "Rerank",
   answer: "Tổng hợp câu trả lời",
   format: "Định dạng và memory",
   result: "Kết quả",
@@ -54,9 +55,20 @@ function progressTone(status: ChatStreamProgress["status"]): AgentTraceStep["ton
   return "info";
 }
 
+function isRetrievalResult(value: unknown): value is RetrievalTraceResult {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function topResults(metadata?: Record<string, unknown>): RetrievalTraceResult[] {
+  const raw = metadata?.top_results;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isRetrievalResult);
+}
+
 function metadataDetail(metadata?: Record<string, unknown>) {
   if (!metadata || Object.keys(metadata).length === 0) return "";
   return Object.entries(metadata)
+    .filter(([key]) => key !== "top_results")
     .map(([key, value]) => `${key}: ${describeValue(value)}`)
     .join("; ");
 }
@@ -70,6 +82,7 @@ function progressStep(data: ChatStreamProgress): AgentTraceStep {
     detail: details.join(" · "),
     elapsedMs: data.elapsed_ms,
     tone: progressTone(data.status),
+    topResults: topResults(data.metadata),
   };
 }
 
@@ -96,6 +109,21 @@ function describeValue(value: unknown) {
   return String(value);
 }
 
+function formatScore(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "0.0000";
+  return value.toFixed(4);
+}
+
+function retrievalTitle(result: RetrievalTraceResult) {
+  return [result.law_id, result.law_name, result.article].filter(Boolean).join(" | ");
+}
+
+const AUTO_SCROLL_THRESHOLD = 96;
+
+function isNearBottom(element: HTMLElement) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_SCROLL_THRESHOLD;
+}
+
 
 export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -111,6 +139,7 @@ export default function Home() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const competitionFileRef = useRef<HTMLInputElement>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const activeConversation = useMemo(
     () => conversations.find((item) => item.id === activeId) || conversations[0],
@@ -140,11 +169,21 @@ export default function Home() {
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element) return;
+    if (!element || !shouldAutoScrollRef.current) return;
     requestAnimationFrame(() => {
       element.scrollTo({ top: element.scrollHeight, behavior: isSending ? "auto" : "smooth" });
     });
   }, [messages, isSending, showStream]);
+
+  useEffect(() => {
+    shouldAutoScrollRef.current = true;
+  }, [activeId]);
+
+  function handleMessagesScroll() {
+    const element = scrollRef.current;
+    if (!element) return;
+    shouldAutoScrollRef.current = isNearBottom(element);
+  }
 
   const visibleConversations = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
@@ -252,6 +291,7 @@ export default function Home() {
     if (!question.trim() || isSending) return;
     const conversationId = activeConversation?.id || createConversation().id;
     const text = question.trim();
+    shouldAutoScrollRef.current = true;
     const userMessage: ChatMessage = { id: createId(), role: "user", content: text, stream: [], trace: [], sources: [] };
     const assistantId = createId();
     const chatEndpoint = chatStreaming ? `${API_BASE}/api/v1/legal/chat/stream` : `${API_BASE}/api/v1/legal/chat`;
@@ -559,7 +599,7 @@ export default function Home() {
           </button>
           {isSending ? <span className="loader" aria-label="Đang xử lý" /> : null}
         </header>
-        <div className="messages" ref={scrollRef}>
+        <div className="messages" ref={scrollRef} onScroll={handleMessagesScroll}>
           {messages.length === 0 ? <div className="empty">Hôm nay bạn có câu hỏi pháp lý gì?</div> : null}
           {messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
@@ -577,6 +617,22 @@ export default function Home() {
                               {step.elapsedMs !== null && step.elapsedMs !== undefined ? <small>{formatElapsed(step.elapsedMs)}</small> : null}
                             </div>
                             <p>{step.detail}</p>
+                            {step.topResults && step.topResults.length > 0 ? (
+                              <div className="retrievalTopList">
+                                {step.topResults.slice(0, 5).map((result, resultIndex) => (
+                                  <div className="retrievalTopItem" key={`${result.law_id || "doc"}-${result.article || resultIndex}-${resultIndex}`}>
+                                    <div className="retrievalTopMeta">
+                                      <span>#{result.rank || resultIndex + 1}</span>
+                                      <span>score {formatScore(result.score)}</span>
+                                      {result.source ? <span>{result.source}</span> : null}
+                                      {typeof result.passed_threshold === "boolean" ? <span>{result.passed_threshold ? "giữ" : "loại"}</span> : null}
+                                    </div>
+                                    <strong>{retrievalTitle(result)}</strong>
+                                    {result.article_title ? <small>{result.article_title}</small> : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
                       ))}

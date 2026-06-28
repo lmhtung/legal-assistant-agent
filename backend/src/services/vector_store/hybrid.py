@@ -43,7 +43,14 @@ class HybridLegalStore:
                 scores[article_id] = scores.get(article_id, 0.0) + weight / (self.rrf_k + rank)
                 if article_id not in merged:
                     merged[article_id] = candidate
-        ranked = sorted(merged.values(), key=lambda item: scores[item.article.article_id], reverse=True)
+        # RRF dùng rank nội bộ của hai nhánh sparse/dense. Khi nhiều candidate
+        # có cùng RRF score, raw score được dùng làm tie-breaker để ưu tiên
+        # candidate có điểm BM25 hoặc Chroma tốt hơn.
+        ranked = sorted(
+            merged.values(),
+            key=lambda item: (scores[item.article.article_id], item.score),
+            reverse=True,
+        )
         for rank, candidate in enumerate(ranked[: query.top_k], start=1):
             score = scores[candidate.article.article_id]
             candidate.rank = rank

@@ -14,15 +14,15 @@ def search_legal_articles(
     registry: VectorStoreRegistry,
     store_factory: VectorStoreFactory,
 ) -> list[RetrievedCandidate]:
-    """Search điều luật trong vector store local theo category.
+    """Search điều luật trong các retrieval store local.
 
     Hàm này là tool search chính của backend agent:
-    - mỗi ``category`` tương ứng một collection/index riêng;
-    - nếu category chưa được mở trong process thì tạo store lazy;
-    - registry chịu trách nhiệm merge/rank kết quả cuối cùng.
+    - agent luôn truyền toàn bộ search spaces đang có, không phân loại query;
+    - nếu search space chưa được mở trong process thì tạo store lazy;
+    - registry merge toàn bộ candidate và trả global top_k tốt nhất.
     """
 
-    for category in query.categories:
-        if not registry.has(category):
-            registry.register(category, store_factory.create(category))
+    for name in query.search_spaces:
+        if not registry.has(name):
+            registry.register(name, store_factory.create(name))
     return registry.search(query)

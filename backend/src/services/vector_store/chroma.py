@@ -1,6 +1,7 @@
 """Vector store Chroma cho structured legal records."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -15,12 +16,16 @@ def safe_collection_name(value: str) -> str:
     """Đổi tên database bất kỳ thành tên collection hợp lệ cho Chroma.
 
     Chroma yêu cầu tên dài 3-512 ký tự, chỉ gồm a-zA-Z0-9._- và phải bắt đầu,
-    kết thúc bằng chữ hoặc số. Vì category tiếng Việt có thể rất dài, ta cắt
-    ngắn rồi strip lại để tránh kết thúc bằng dấu gạch dưới.
+    kết thúc bằng chữ hoặc số. Search space có thể dài nên khi phải cắt ngắn
+    ta thêm hash ổn định để tránh trùng collection.
     """
 
+    max_length = 60
     name = _NON_WORD_RE.sub("_", value.lower()).strip("._-")
-    name = name[:60].strip("._-")
+    if len(name) > max_length:
+        suffix = hashlib.sha1(name.encode("utf-8")).hexdigest()[:10]
+        prefix = name[: max_length - len(suffix) - 1].strip("._-")
+        name = f"{prefix}_{suffix}".strip("._-")
     if len(name) < 3:
         return "legal_articles"
     return name
@@ -83,8 +88,6 @@ class ChromaLegalStore:
             "law_id": article.law_id,
             "law_name": article.law_name,
             "doc_type": article.doc_type,
-            "category": article.category,
-            "database": article.category,
             "chapter": article.chapter or "",
             "article": article.article,
             "article_title": article.article_title or "",
@@ -108,7 +111,6 @@ class ChromaLegalStore:
                 law_id=str(metadata.get("law_id") or ""),
                 law_name=str(metadata.get("law_name") or ""),
                 doc_type=str(metadata.get("doc_type") or ""),
-                category=str(metadata.get("category") or metadata.get("database") or self.database),
                 chapter=str(metadata.get("chapter") or "") or None,
                 article=str(metadata.get("article") or ""),
                 article_title=str(metadata.get("article_title") or "") or None,

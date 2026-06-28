@@ -22,7 +22,7 @@ Chỉ sửa [backend/config.yaml](backend/config.yaml). Ví dụ:
 ```yaml
 app:
   host: 0.0.0.0
-  port: 8025
+  port: 8000
 
 ui:
   host: 0.0.0.0
@@ -84,8 +84,8 @@ Với cấu hình hiện tại:
 
 ```text
 UI:         http://localhost:5173
-Backend:    http://localhost:8025
-Health:     http://localhost:8025/health
+Backend:    http://localhost:8000
+Health:     http://localhost:8000/health
 PostgreSQL: localhost:23432
 ```
 
@@ -172,7 +172,7 @@ ghi `competition_<run_id>_running.json` sau mỗi câu và luôn append
 Dataset mặc định:
 
 ```text
-backend/src/categories/crawled_articles_category.json
+backend/data/base_data.json
 ```
 
 Luồng:
@@ -184,5 +184,4 @@ JSON -> PostgreSQL -> backend startup -> Chroma + BM25 -> agent
 Script import upsert theo `id` và xóa manifest/cache retrieval. Backend sẽ rebuild
 Chroma/BM25 ở lần khởi động kế tiếp. Sau đó BM25 được nạp từ
 `backend/chroma_db/legal_bm25_cache.json`, nên không tokenize lại ở mỗi lần
-restart nếu config và dữ liệu không đổi. Dataset hiện có 13.969 record thuộc 57
-category.
+restart nếu config và dữ liệu không đổi. Dataset không còn trường `category`; agent luôn search global `top_k` trên một retrieval store đã nạp.

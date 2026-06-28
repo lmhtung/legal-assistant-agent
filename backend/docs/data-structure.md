@@ -13,8 +13,7 @@ PostgreSQL là nguồn dữ liệu chuẩn để backend tự build Chroma khi k
   "article": "Điều 1",
   "article_title": "Phạm vi điều chỉnh",
   "content": "Luật này quy định về quyền, trách nhiệm...",
-  "author": "Quốc hội",
-  "category": "luat_bao_hiem_xa_hoi"
+  "author": "Quốc hội"
 }
 ```
 
@@ -22,7 +21,7 @@ Các cột bắt buộc:
 
 ```text
 id, law_id, law_name, doc_type, article, article_title,
-content, author, category
+content, author
 ```
 
 `chapter` và `extra` là tùy chọn. `extra` có thể là JSON/JSONB/array chứa các
@@ -37,25 +36,15 @@ doc_type|law_id|law_name|article
 Mỗi record dùng đúng một format:
 
 ```text
-{law_name}
-{article_title}
-{content}
+{article_title}:{content}
 ```
 
-Không đưa `id`, `law_id`, `doc_type`, `article`, `author`, `category` hoặc
+Không đưa `id`, `law_id`, `doc_type`, `article`, `author` hoặc
 `extra` vào vector text. Các field này vẫn được lưu trong Chroma metadata để
-lọc, trích dẫn và dựng lại `LegalArticle`.
+trích dẫn và dựng lại `LegalArticle`.
 
-## Chia collection
+## Retrieval metadata
 
-Mỗi `category` tương ứng một collection:
+Dataset không còn trường `category`. Agent không gọi LLM để phân loại category, không giới hạn search theo category và không chia Chroma/BM25 theo category. Mỗi request search global `top_k` trên retrieval store đã nạp.
 
-```text
-legal_articles_luat_bao_hiem_xa_hoi
-legal_articles_luat_dau_thau
-...
-```
-
-LLM phân loại category trước retrieval, sau đó agent chỉ search các collection
-phù hợp. Build document và search query luôn sử dụng cùng `EmbeddingsClient`,
-cùng endpoint, model và tokenizer phía embedding server.
+Build document và search query luôn sử dụng cùng `EmbeddingsClient`, cùng endpoint, model và tokenizer phía embedding server.

@@ -4,7 +4,6 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -55,27 +54,27 @@ async def initialize_legal_index(
     with lock_path.open("w") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         logger.info("[index] Đang đọc legal records từ PostgreSQL")
-        articles_by_category = await _fetch_articles(settings)
-        if not articles_by_category:
+        articles_by_space = await _fetch_articles(settings)
+        if not articles_by_space:
             return
-        total_records = sum(len(items) for items in articles_by_category.values())
+        total_records = sum(len(items) for items in articles_by_space.values())
         logger.info(
-            "[index] Đã đọc %s record thuộc %s category",
+            "[index] Đã đọc %s record thuộc %s search space",
             total_records,
-            len(articles_by_category),
+            len(articles_by_space),
         )
-        expected_manifest = _manifest(settings, articles_by_category)
+        expected_manifest = _manifest(settings, articles_by_space)
         vector = settings.legal_assistant.vector_store
         if vector.mode in {"chroma", "hybrid"}:
             manifest_path = persist_directory / _MANIFEST_NAME
             current_manifest = _read_manifest(manifest_path)
             rebuild = current_manifest != expected_manifest or not _collections_are_complete(
                 settings,
-                expected_manifest["categories"],
+                expected_manifest["search_spaces"],
             )
             if rebuild:
                 logger.info("[index] Chroma chưa hợp lệ, bắt đầu embedding và rebuild")
-                _rebuild_chroma(settings, articles_by_category)
+                _rebuild_chroma(settings, articles_by_space)
                 manifest_path.write_text(
                     json.dumps(expected_manifest, ensure_ascii=False, indent=2),
                     encoding="utf-8",
@@ -87,12 +86,12 @@ async def initialize_legal_index(
             logger.info("[index] mode=bm25, bỏ qua Chroma/embedding")
 
         logger.info("[index] Bắt đầu đăng ký runtime stores")
-        _register_runtime_stores(settings, registry, articles_by_category, expected_manifest)
+        _register_runtime_stores(settings, registry, articles_by_space, expected_manifest)
         logger.info("[index] Hoàn tất chuẩn bị retrieval index")
 
 
 async def _fetch_articles(settings: Settings) -> dict[str, list[LegalArticle]]:
-    """Đọc toàn bộ record luật từ PostgreSQL và nhóm theo category."""
+    """Đọc toàn bộ record luật từ PostgreSQL vào một search space duy nhất."""
 
     try:
         import asyncpg
@@ -112,7 +111,6 @@ async def _fetch_articles(settings: Settings) -> dict[str, list[LegalArticle]]:
             "article_title",
             "content",
             "author",
-            postgres.category_column,
         }
         missing = required - available_columns
         if missing:
@@ -124,10 +122,9 @@ async def _fetch_articles(settings: Settings) -> dict[str, list[LegalArticle]]:
         ]
         sql = f"""
             SELECT id, law_id, law_name, doc_type, article, article_title,
-                   content, author, {', '.join(optional_selects)},
-                   {quote_identifier(postgres.category_column)} AS category
+                   content, author, {', '.join(optional_selects)}
             FROM {quote_identifier(postgres.table_name)}
-            ORDER BY {quote_identifier(postgres.category_column)}, id
+            ORDER BY id
         """
         rows = await conn.fetch(sql)
     finally:
@@ -137,14 +134,13 @@ async def _fetch_articles(settings: Settings) -> dict[str, list[LegalArticle]]:
         logger.warning("PostgreSQL chưa có legal record; backend khởi động với index rỗng")
         return {}
 
-    grouped: dict[str, list[LegalArticle]] = defaultdict(list)
+    articles: list[LegalArticle] = []
     for row in rows:
         data = dict(row)
         data["id"] = str(data["id"])
-        data["category"] = str(data.get("category") or "default")
         data["extra"] = _normalize_extra(data.get("extra"))
-        grouped[data["category"]].append(LegalArticle.model_validate(data))
-    return dict(grouped)
+        articles.append(LegalArticle.model_validate(data))
+    return {"default": articles}
 
 
 async def _get_columns(conn: Any, table_name: str) -> set[str]:
@@ -191,14 +187,13 @@ def _manifest(settings: Settings, grouped: dict[str, list[LegalArticle]]) -> dic
             "port": parsed.port or 5432,
             "database": parsed.path.lstrip("/"),
             "table": postgres.table_name,
-            "category_column": postgres.category_column,
         },
         "embedding": {
             "base_url": settings.embeddings.base_url.rstrip("/"),
             "model": settings.embeddings.model,
         },
-        "vector_text": "law_name\narticle_title\ncontent",
-        "categories": {category: len(items) for category, items in sorted(grouped.items())},
+        "vector_text": "law_name\\narticle_title:content",
+        "search_spaces": {name: len(items) for name, items in sorted(grouped.items())},
         "total_records": sum(len(items) for items in grouped.values()),
     }
 
@@ -212,7 +207,7 @@ def _read_manifest(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _collections_are_complete(settings: Settings, categories: dict[str, int]) -> bool:
+def _collections_are_complete(settings: Settings, search_spaces: dict[str, int]) -> bool:
     """Đối chiếu số vector trong Chroma với manifest PostgreSQL."""
 
     try:
@@ -220,8 +215,8 @@ def _collections_are_complete(settings: Settings, categories: dict[str, int]) ->
 
         vector = settings.legal_assistant.vector_store
         client = chromadb.PersistentClient(path=str(vector.persist_directory))
-        for category, expected_count in categories.items():
-            name = safe_collection_name(f"{vector.default_collection}_{category}")
+        for search_space, expected_count in search_spaces.items():
+            name = safe_collection_name(f"{vector.default_collection}_{search_space}")
             if client.get_collection(name).count() != expected_count:
                 return False
         return True
@@ -230,7 +225,7 @@ def _collections_are_complete(settings: Settings, categories: dict[str, int]) ->
 
 
 def _rebuild_chroma(settings: Settings, grouped: dict[str, list[LegalArticle]]) -> None:
-    """Xóa collection legal cũ rồi embed/upsert từng category theo batch."""
+    """Xóa collection legal cũ rồi embed/upsert một search space theo batch."""
 
     import chromadb
 
@@ -244,18 +239,18 @@ def _rebuild_chroma(settings: Settings, grouped: dict[str, list[LegalArticle]]) 
             client.delete_collection(name)
 
     embeddings = get_embeddings_client()
-    total_categories = len(grouped)
+    total_spaces = len(grouped)
     processed_records = 0
-    for category_index, (category, articles) in enumerate(grouped.items(), start=1):
+    for space_index, (search_space, articles) in enumerate(grouped.items(), start=1):
         logger.info(
             "[index][Chroma %s/%s] %s: %s record",
-            category_index,
-            total_categories,
-            category,
+            space_index,
+            total_spaces,
+            search_space,
             len(articles),
         )
         store = ChromaLegalStore(
-            database=category,
+            database=search_space,
             persist_directory=str(vector.persist_directory),
             collection_prefix=vector.default_collection,
             embeddings=embeddings,
@@ -277,7 +272,7 @@ def _register_runtime_stores(
     grouped: dict[str, list[LegalArticle]],
     index_manifest: dict[str, Any],
 ) -> None:
-    """Đăng ký Chroma/BM25 store cho từng category trong process hiện tại."""
+    """Đăng ký Chroma/BM25 store cho một search space trong process hiện tại."""
 
     vector = settings.legal_assistant.vector_store
     chroma_required = vector.mode in {"chroma", "hybrid"}
@@ -285,35 +280,35 @@ def _register_runtime_stores(
     embeddings = get_embeddings_client() if chroma_required else None
     bm25_stores = _load_or_build_bm25_stores(settings, grouped, index_manifest) if bm25_required else {}
 
-    total_categories = len(grouped)
-    for category_index, (category, articles) in enumerate(grouped.items(), start=1):
+    total_spaces = len(grouped)
+    for space_index, (search_space, articles) in enumerate(grouped.items(), start=1):
         logger.info(
             "[index][Runtime %s/%s] %s: đăng ký %s record",
-            category_index,
-            total_categories,
-            category,
+            space_index,
+            total_spaces,
+            search_space,
             len(articles),
         )
         chroma_store = None
         if chroma_required:
             chroma_store = ChromaLegalStore(
-                database=category,
+                database=search_space,
                 persist_directory=str(vector.persist_directory),
                 collection_prefix=vector.default_collection,
                 embeddings=embeddings,
             )
         if vector.mode == "chroma":
             assert chroma_store is not None
-            registry.register(category, chroma_store)
+            registry.register(search_space, chroma_store)
             continue
 
-        lexical_store = bm25_stores[category]
+        lexical_store = bm25_stores[search_space]
         if vector.mode == "bm25":
-            registry.register(category, lexical_store)
+            registry.register(search_space, lexical_store)
         else:
             assert chroma_store is not None
             registry.register(
-                category,
+                search_space,
                 HybridLegalStore(
                     lexical_store,
                     chroma_store,
@@ -346,12 +341,12 @@ def _load_or_build_bm25_stores(
     stores = _build_bm25_stores(settings, grouped)
     cache = {
         "manifest": expected_manifest,
-        "categories": {
-            category: {
-                "article_ids": [article.article_id for article in grouped[category]],
+        "search_spaces": {
+            search_space: {
+                "article_ids": [article.article_id for article in grouped[search_space]],
                 "tokenized_corpus": store.export_tokenized_corpus(),
             }
-            for category, store in stores.items()
+            for search_space, store in stores.items()
         },
     }
     cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
@@ -363,28 +358,28 @@ def _build_bm25_stores(
     settings: Settings,
     grouped: dict[str, list[LegalArticle]],
 ) -> dict[str, InMemoryLegalStore]:
-    """Tokenize records và dựng BM25 store theo từng category."""
+    """Tokenize records và dựng BM25 store theo một search space."""
 
     vector = settings.legal_assistant.vector_store
     stores: dict[str, InMemoryLegalStore] = {}
-    total_categories = len(grouped)
-    for category_index, (category, articles) in enumerate(grouped.items(), start=1):
+    total_spaces = len(grouped)
+    for space_index, (search_space, articles) in enumerate(grouped.items(), start=1):
         logger.info(
             "[index][BM25 %s/%s] %s: tokenize %s record",
-            category_index,
-            total_categories,
-            category,
+            space_index,
+            total_spaces,
+            search_space,
             len(articles),
         )
         store = InMemoryLegalStore(
-            database=category,
+            database=search_space,
             tokenizer=vector.bm25_tokenizer,
             k1=vector.bm25_k1,
             b=vector.bm25_b,
             epsilon=vector.bm25_epsilon,
         )
         store.add_articles(articles)
-        stores[category] = store
+        stores[search_space] = store
     return stores
 
 
@@ -396,13 +391,13 @@ def _bm25_stores_from_cache(
     """Khôi phục BM25 store từ tokenized corpus đã lưu."""
 
     vector = settings.legal_assistant.vector_store
-    categories = cache.get("categories")
-    if not isinstance(categories, dict):
+    search_spaces = cache.get("search_spaces")
+    if not isinstance(search_spaces, dict):
         return None
 
     stores: dict[str, InMemoryLegalStore] = {}
-    for category, articles in grouped.items():
-        payload = categories.get(category)
+    for search_space, articles in grouped.items():
+        payload = search_spaces.get(search_space)
         if not isinstance(payload, dict):
             return None
         article_ids = payload.get("article_ids")
@@ -411,8 +406,8 @@ def _bm25_stores_from_cache(
             return None
         if not isinstance(tokenized_corpus, list) or len(tokenized_corpus) != len(articles):
             return None
-        stores[category] = InMemoryLegalStore.from_indexed_articles(
-            database=category,
+        stores[search_space] = InMemoryLegalStore.from_indexed_articles(
+            database=search_space,
             articles=articles,
             tokenized_corpus=tokenized_corpus,
             tokenizer=vector.bm25_tokenizer,

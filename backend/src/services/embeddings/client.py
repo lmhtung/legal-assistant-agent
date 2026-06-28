@@ -11,6 +11,8 @@ class EmbeddingsClient:
     """Client embedding dùng LangChain ``OpenAIEmbeddings``.
 
     Endpoint có thể là server local bạn đã host, miễn là API tương thích OpenAI.
+    Với base_url=http://localhost:8026/v1, LangChain sẽ gọi đúng endpoint
+    POST http://localhost:8026/v1/embeddings.
     Trước khi gọi endpoint, client cắt text theo ``embeddings.max_input_tokens``
     để tránh lỗi context length khi một điều luật có ``content`` quá dài.
     """

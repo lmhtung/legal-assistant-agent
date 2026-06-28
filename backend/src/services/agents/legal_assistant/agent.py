@@ -15,10 +15,10 @@ from src.services.agents.base.client import BaseAgent
 from src.services.agents.base.context import AgentContext
 from src.services.agents.legal_assistant.node import (
     analyze_intent_node,
-    classify_categories_node,
     format_submission_node,
     generate_answer_node,
     prepare_retrieval_query_node,
+    rerank_node,
     retrieve_node,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
@@ -47,7 +47,6 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         )
         context = AgentContext(
             session_id=request.session_id,
-            categories=request.categories,
             top_k=request.top_k or self.settings.legal_assistant.vector_store.top_k,
         )
         return {
@@ -58,7 +57,6 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             "retrieval_question": request.question,
             "retrieval_mode": _retrieval_mode(self.settings),
             "query_variants": [request.question],
-            "categories": request.categories,
             "messages": [HumanMessage(content=request.question)] if HumanMessage else [],
             "context": context,
             "tool_calls": [],
@@ -98,12 +96,13 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                     "retrieval_mode": state.get("retrieval_mode"),
                     "retrieval_question": state.get("retrieval_question"),
                     "query_variants": state.get("query_variants", []),
-                    "categories": state.get("categories", []),
-                    "per_category": state.get("per_category", False),
                     "rewritten_question": state.get("rewritten_question"),
                     "hypothetical_answer": state.get("hypothetical_answer"),
-                    "category_hypothetical_answers": state.get("category_hypothetical_answers", {}),
                     "skip_retrieval": state.get("skip_retrieval", False),
+                    "reranker_enabled": self.settings.legal_assistant.reranker.enabled,
+                    "reranker_threshold": self.settings.legal_assistant.reranker.threshold,
+                    "reranked_count": len(state.get("reranked", [])),
+                    "selected_count": len(state.get("selected_articles", [])),
                     "memory_enabled": self.settings.short_memory.enabled,
                 }
             )
@@ -128,16 +127,16 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         workflow = StateGraph(LegalAssistantState)
         workflow.add_node("analyze_intent", partial(analyze_intent_node, self))
         workflow.add_node("prepare_retrieval_query", partial(prepare_retrieval_query_node, self))
-        workflow.add_node("classify_categories", partial(classify_categories_node, self))
         workflow.add_node("retrieve", partial(retrieve_node, self))
+        workflow.add_node("rerank", partial(rerank_node, self))
         workflow.add_node("generate_answer", partial(generate_answer_node, self))
         workflow.add_node("format_submission", partial(format_submission_node, self))
 
         workflow.set_entry_point("analyze_intent")
         workflow.add_edge("analyze_intent", "prepare_retrieval_query")
-        workflow.add_edge("prepare_retrieval_query", "classify_categories")
-        workflow.add_edge("classify_categories", "retrieve")
-        workflow.add_edge("retrieve", "generate_answer")
+        workflow.add_edge("prepare_retrieval_query", "retrieve")
+        workflow.add_edge("retrieve", "rerank")
+        workflow.add_edge("rerank", "generate_answer")
         workflow.add_edge("generate_answer", "format_submission")
         workflow.add_edge("format_submission", END)
 
@@ -148,8 +147,8 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         for node in (
             analyze_intent_node,
             prepare_retrieval_query_node,
-            classify_categories_node,
             retrieve_node,
+            rerank_node,
             generate_answer_node,
             format_submission_node,
         ):
