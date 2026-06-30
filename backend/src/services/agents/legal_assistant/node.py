@@ -18,6 +18,7 @@ from src.services.agents.legal_assistant.prompt import (
     build_hyde_messages,
     build_intent_messages,
     build_legal_context_message,
+    build_llm_filter_messages,
     build_rewrite_query_messages,
 )
 from src.services.agents.legal_assistant.state import LegalAssistantState
@@ -275,10 +276,13 @@ async def rerank_node(runtime: Any, state: LegalAssistantState) -> LegalAssistan
         "rerank",
         "started",
         "Đang rerank các điều luật tìm được",
-        detail="Gọi Qwen3 reranker và lọc theo threshold.",
+        detail=f"Gọi Qwen3 reranker và lọc theo mode {settings.filter_mode}.",
         metadata={
             "model": settings.model,
+            "filter_mode": settings.filter_mode,
             "threshold": settings.threshold,
+            "min_gap": settings.min_gap,
+            "min_keep": settings.min_keep,
             "num_candidates": len(candidates),
             "query": query,
         },
@@ -292,12 +296,16 @@ async def rerank_node(runtime: Any, state: LegalAssistantState) -> LegalAssistan
         for candidate, score in zip(candidates, scores):
             scored.append(candidate.model_copy(update={"score": score, "reason": f"rerank_score={score}"}))
         scored.sort(key=lambda item: item.score, reverse=True)
-        kept = [candidate for candidate in scored if candidate.score >= settings.threshold]
+        kept, filter_info = _filter_reranked_candidates(scored, settings)
     except Exception as exc:  # pragma: no cover - endpoint/runtime guard
         error = str(exc)
         state.setdefault("debug", {})["reranker_error"] = error
         scored = candidates
         kept = candidates
+        filter_info = {"filter_mode": settings.filter_mode, "fallback": True}
+
+    if "filter_info" not in locals():
+        filter_info = {"filter_mode": settings.filter_mode}
 
     state["reranked"] = scored
     state["selected_articles"] = [candidate.article for candidate in kept]
@@ -305,7 +313,14 @@ async def rerank_node(runtime: Any, state: LegalAssistantState) -> LegalAssistan
         {
             "name": "rerank_legal_articles",
             "provider": "qwen3-reranker",
-            "args": {"model": settings.model, "threshold": settings.threshold, "query": query},
+            "args": {
+                "model": settings.model,
+                "filter_mode": settings.filter_mode,
+                "threshold": settings.threshold,
+                "min_gap": settings.min_gap,
+                "min_keep": settings.min_keep,
+                "query": query,
+            },
             "num_candidates": len(candidates),
             "num_kept": len(kept),
             "error": error,
@@ -319,10 +334,125 @@ async def rerank_node(runtime: Any, state: LegalAssistantState) -> LegalAssistan
         detail=error,
         metadata={
             "model": settings.model,
+            "filter_mode": settings.filter_mode,
             "threshold": settings.threshold,
+            "min_gap": settings.min_gap,
+            "min_keep": settings.min_keep,
             "num_candidates": len(candidates),
             "num_kept": len(kept),
-            "top_results": _top_rerank_results(scored, settings.threshold, limit=5),
+            **filter_info,
+            "top_results": _top_rerank_results(scored, kept, limit=5),
+        },
+    )
+    return state
+
+
+async def llm_filter_node(runtime: Any, state: LegalAssistantState) -> LegalAssistantState:
+    """Bước 5: dùng LLM kiểm tra từng điều luật sau rerank là PASS hay DROP."""
+
+    started = perf_counter()
+    settings = runtime.settings.legal_assistant.llm_filter
+    selected = state.get("selected_articles", [])
+    if state.get("skip_retrieval") or not selected:
+        state["llm_filtered"] = []
+        await emit_progress(
+            "llm_filter",
+            "completed",
+            "Bỏ qua LLM filter",
+            elapsed_ms=_elapsed_ms(started),
+            detail="Không có điều luật sau rerank để đánh giá.",
+            metadata={"enabled": settings.enabled, "num_candidates": len(selected)},
+        )
+        return state
+
+    if not settings.enabled or runtime.llm is None:
+        state["llm_filtered"] = state.get("reranked", [])
+        await emit_progress(
+            "llm_filter",
+            "completed",
+            "LLM filter đang tắt",
+            elapsed_ms=_elapsed_ms(started),
+            detail="Dùng nguyên kết quả sau rerank.",
+            metadata={"enabled": settings.enabled, "has_llm": runtime.llm is not None, "num_candidates": len(selected)},
+        )
+        return state
+
+    selected_ids = {article.id for article in selected}
+    candidates = [candidate for candidate in state.get("reranked", []) if candidate.article.id in selected_ids]
+    if not candidates:
+        candidates = [RetrievedCandidate(article=article, source="hybrid", score=0.0) for article in selected]
+
+    query, query_source = _llm_filter_query(runtime, state)
+    await emit_progress(
+        "llm_filter",
+        "started",
+        "Đang để LLM đánh giá lại từng điều luật",
+        detail="Mỗi điều luật sau rerank được chấm PASS/DROP theo query.",
+        metadata={
+            "enabled": True,
+            "num_candidates": len(candidates),
+            "max_concurrency": settings.max_concurrency,
+            "min_keep": settings.min_keep,
+            "filter_query_source": query_source,
+            "filter_query": query,
+        },
+    )
+
+    semaphore = asyncio.Semaphore(settings.max_concurrency)
+
+    async def judge(candidate: RetrievedCandidate) -> tuple[RetrievedCandidate, str, str | None]:
+        async with semaphore:
+            try:
+                system_prompt, human_prompt = build_llm_filter_messages(query, candidate.article, query_source)
+                result = (await _invoke_prompt_messages(runtime, system_prompt, human_prompt)).strip().upper()
+                label = "PASS" if result.startswith("PASS") else "DROP"
+                return candidate, label, None
+            except Exception as exc:  # pragma: no cover - endpoint/runtime guard
+                return candidate, "PASS", str(exc)
+
+    judged = await asyncio.gather(*(judge(candidate) for candidate in candidates))
+    errors = [error for _, _, error in judged if error]
+    kept_candidates = [candidate for candidate, label, _ in judged if label == "PASS"]
+    if len(kept_candidates) < settings.min_keep:
+        kept_ids = {candidate.article.id for candidate in kept_candidates}
+        for candidate in candidates:
+            if len(kept_candidates) >= settings.min_keep:
+                break
+            if candidate.article.id not in kept_ids:
+                kept_candidates.append(candidate)
+                kept_ids.add(candidate.article.id)
+
+    state["llm_filtered"] = kept_candidates
+    state["selected_articles"] = [candidate.article for candidate in kept_candidates]
+    state.setdefault("tool_calls", []).append(
+        {
+            "name": "llm_filter_legal_articles",
+            "provider": "llm",
+            "args": {
+                "query": query,
+                "query_source": query_source,
+                "max_concurrency": settings.max_concurrency,
+                "min_keep": settings.min_keep,
+            },
+            "num_candidates": len(candidates),
+            "num_kept": len(kept_candidates),
+            "num_errors": len(errors),
+        }
+    )
+    await emit_progress(
+        "llm_filter",
+        "warning" if errors else "completed",
+        f"LLM filter giữ {len(kept_candidates)}/{len(candidates)} kết quả",
+        elapsed_ms=_elapsed_ms(started),
+        detail=(f"Có {len(errors)} lỗi, các item lỗi được giữ lại." if errors else None),
+        metadata={
+            "num_candidates": len(candidates),
+            "num_kept": len(kept_candidates),
+            "num_dropped": len(candidates) - len(kept_candidates),
+            "num_errors": len(errors),
+            "filter_query_source": query_source,
+            "filter_query": query,
+            "top_results": _top_llm_filter_results(judged, kept_candidates, limit=5),
         },
     )
     return state
@@ -428,13 +558,60 @@ def _top_retrieval_results(candidates: list[RetrievedCandidate], limit: int = 5)
     return results
 
 
+def _filter_reranked_candidates(
+    candidates: list[RetrievedCandidate],
+    settings: Any,
+) -> tuple[list[RetrievedCandidate], dict[str, Any]]:
+    """Lọc candidate sau rerank theo threshold tĩnh hoặc gap động."""
+
+    if settings.filter_mode == "fixed":
+        kept = [candidate for candidate in candidates if (candidate.score or 0.0) >= settings.threshold]
+        return kept, {"filter_mode": "fixed", "effective_threshold": settings.threshold}
+
+    if len(candidates) <= settings.min_keep:
+        return candidates, {
+            "filter_mode": "largest_gap",
+            "largest_gap": 0.0,
+            "cut_rank": len(candidates),
+            "dynamic_threshold": None,
+            "reason": "candidate_count <= min_keep",
+        }
+
+    gaps: list[dict[str, float | int]] = []
+    for index in range(len(candidates) - 1):
+        upper = float(candidates[index].score or 0.0)
+        lower = float(candidates[index + 1].score or 0.0)
+        gaps.append({"rank": index + 1, "gap": upper - lower, "upper": upper, "lower": lower})
+
+    best_gap = max(gaps, key=lambda item: float(item["gap"]))
+    largest_gap = float(best_gap["gap"])
+    if largest_gap < settings.min_gap:
+        return candidates, {
+            "filter_mode": "largest_gap",
+            "largest_gap": round(largest_gap, 6),
+            "cut_rank": len(candidates),
+            "dynamic_threshold": None,
+            "reason": "largest_gap < min_gap",
+        }
+
+    cut_rank = max(int(best_gap["rank"]), settings.min_keep)
+    dynamic_threshold = (float(best_gap["upper"]) + float(best_gap["lower"])) / 2
+    return candidates[:cut_rank], {
+        "filter_mode": "largest_gap",
+        "largest_gap": round(largest_gap, 6),
+        "cut_rank": cut_rank,
+        "dynamic_threshold": round(dynamic_threshold, 6),
+    }
+
+
 def _top_rerank_results(
     candidates: list[RetrievedCandidate],
-    threshold: float,
+    kept: list[RetrievedCandidate],
     limit: int = 5,
 ) -> list[dict[str, Any]]:
     """Rút gọn rerank candidates để UI hiển thị score và trạng thái lọc."""
 
+    kept_ids = {candidate.article.id for candidate in kept}
     results: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidates[:limit], start=1):
         article = candidate.article
@@ -448,7 +625,49 @@ def _top_rerank_results(
                 "law_name": article.law_name,
                 "article": article.article,
                 "article_title": article.article_title or "",
-                "passed_threshold": float(score) >= threshold,
+                "passed_threshold": article.id in kept_ids,
+            }
+        )
+    return results
+
+
+def _llm_filter_query(runtime: Any, state: LegalAssistantState) -> tuple[str, str]:
+    """Chọn query dùng riêng cho LLM filter theo config rewrite/HyDE."""
+
+    assistant = runtime.settings.legal_assistant
+    if assistant.hyde.enabled and state.get("hypothetical_answer"):
+        return state["hypothetical_answer"], "hyde"
+    if assistant.rewrite.enabled and state.get("rewritten_question"):
+        return state["rewritten_question"], "rewrite"
+    if state.get("retrieval_question"):
+        return state["retrieval_question"], state.get("retrieval_mode", "retrieval_question")
+    return state["question"], "original"
+
+
+def _top_llm_filter_results(
+    judged: list[tuple[RetrievedCandidate, str, str | None]],
+    kept: list[RetrievedCandidate],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Rút gọn kết quả LLM filter để UI hiển thị PASS/DROP."""
+
+    kept_ids = {candidate.article.id for candidate in kept}
+    results: list[dict[str, Any]] = []
+    for index, (candidate, label, error) in enumerate(judged[:limit], start=1):
+        article = candidate.article
+        score = candidate.score if candidate.score is not None else 0.0
+        results.append(
+            {
+                "rank": index,
+                "score": round(float(score), 6),
+                "source": candidate.source,
+                "law_id": article.law_id,
+                "law_name": article.law_name,
+                "article": article.article,
+                "article_title": article.article_title or "",
+                "llm_label": label,
+                "passed_threshold": article.id in kept_ids,
+                "error": error,
             }
         )
     return results

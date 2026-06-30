@@ -120,7 +120,7 @@ embedding thứ hai trong backend. `bm25_tokenizer` chỉ phục vụ nhánh key
 Agent không còn dùng LLM để phân loại category. Khi query cần retrieval, backend luôn search global `top_k` trên retrieval store đã được nạp khi startup.
 
 ```text
-query -> Chroma/BM25 store -> global rank -> top_k candidates -> reranker threshold -> final context
+query -> Chroma/BM25 store -> global rank -> top_k candidates -> reranker filter -> optional LLM filter -> final context
 ```
 
 Khi `mode: hybrid`, startup nạp cùng legal records vào BM25. Search chạy song song hai nhánh và hợp nhất rank bằng RRF:
@@ -136,9 +136,16 @@ Dataset/PostgreSQL không còn dùng trường `category`; Chroma/BM25 được 
 ## 6.1. Reranker
 
 Reranker là một service scoring, không phải agent riêng. Sau retrieval, backend gọi
-Qwen3 reranker với `query=retrieval_question`, `documents=[law_name\\narticle_title:content, ...]` và `top_n=len(documents)`. Những điều
-luật có score nhỏ hơn `legal_assistant.reranker.threshold` bị loại khỏi context cuối.
+Qwen3 reranker với `query=retrieval_question`, `documents=[law_name\\narticle_title:content, ...]` và `top_n=len(documents)`. Sau khi có score, backend lọc theo `legal_assistant.reranker.filter_mode`:
+
+- `fixed`: dùng threshold tĩnh, giữ score lớn hơn hoặc bằng `threshold`.
+- `largest_gap`: tìm khoảng cách score lớn nhất giữa hai kết quả liền kề trong danh sách đã sort giảm dần, giữ phần phía trên khoảng cách đó. `min_gap` là gap tối thiểu để được phép cắt, `min_keep` là số điều luật tối thiểu luôn giữ.
+
 Score reranker có thể âm nên threshold không bị giới hạn dương.
+
+## 6.2. LLM filter sau rerank
+
+`legal_assistant.llm_filter` là bước tùy chọn sau reranker. Backend gửi từng điều luật đã qua rerank cho LLM và dùng prompt riêng theo nguồn query: rewritten query dùng prompt đánh giá quan hệ trực tiếp, HyDE answer dùng prompt đánh giá tương đồng ngữ nghĩa pháp lý. Kết quả vẫn chỉ là `PASS` hoặc `DROP`. `PASS` được giữ trong context cuối, `DROP` bị loại. Bước này không tạo agent mới và không dùng registry vì nó chỉ là quality gate nội bộ của legal workflow. Nếu endpoint LLM lỗi, item lỗi được giữ lại để tránh mất căn cứ; nếu LLM loại hết, `min_keep` giữ lại top N sau rerank.
 
 ## 7. Workflow chat
 

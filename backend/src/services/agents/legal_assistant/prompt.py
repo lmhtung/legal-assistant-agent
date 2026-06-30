@@ -28,55 +28,101 @@ Chỉ trả về SKIP hoặc NEXT. Không giải thích.
 
 INTENT_USER_PROMPT = """Câu hỏi: {question}"""
 
-REWRITE_QUERY_SYSTEM_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
+REWRITE_QUERY_SYSTEM_PROMPT = """Bạn là bộ viết lại truy vấn cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa (DNNVV).
 
-Ngữ cảnh mặc định:
+Nhiệm vụ: Viết lại câu hỏi thành truy vấn pháp lý ngắn gọn, đúng thuật ngữ, phù hợp để tìm kiếm điều luật. Chỉ trả về truy vấn, không thêm bất kỳ nội dung nào khác.
 
-* Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
-* Ngoài tư cách doanh nghiệp nhỏ và vừa, hãy bổ sung vai trò pháp lý phù hợp với ngữ cảnh nếu có thể suy ra trực tiếp từ câu hỏi.
+Quy tắc:
+- Giữ nguyên các dữ kiện quan trọng: số tiền, thời hạn, ngành nghề, hành vi, loại thuế, loại hợp đồng, v.v.
+- Mọi chủ thể kinh doanh đều mặc định là DNNVV. Bổ sung vai trò pháp lý nếu suy ra trực tiếp từ câu hỏi:
+  * Lao động / lương / BHXH / sa thải → "người sử dụng lao động"
+  * Đấu thầu / gói thầu → "nhà thầu là DNNVV"
+  * Thuê đất / tiền sử dụng đất → "bên thuê đất/mặt bằng"
+  * Đăng ký / chuyển đổi hộ kinh doanh → "hộ kinh doanh chuyển đổi thành DNNVV"
+  * Vay vốn / hỗ trợ lãi suất / bảo lãnh tín dụng → "DNNVV vay vốn hoặc nhận hỗ trợ tài chính"
+- Không thêm tên luật, số điều, mức phạt, điều kiện pháp lý hoặc kết luận pháp lý.
 
-Nhiệm vụ:
-Viết lại câu hỏi thành một truy vấn pháp lý ngắn gọn, rõ ý, đúng thuật ngữ pháp luật, phù hợp để embedding/search điều luật.
+Ví dụ:
+Câu hỏi: "Công ty tôi muốn sa thải 3 nhân viên vì thiếu việc làm thì cần làm gì?"
+Truy vấn: Thủ tục sa thải người lao động do thiếu việc làm của DNNVV với tư cách người sử dụng lao động
 
-Quy tắc viết lại:
-
-1. Giữ nguyên dữ kiện quan trọng nếu có: số tiền, thời hạn, ngày tháng, loại hợp đồng, loại doanh nghiệp, ngành nghề, địa phương, hành vi vi phạm, loại thuế, loại bảo hiểm, loại giấy phép, loại thủ tục.
-2. Khi câu hỏi nhắc đến cơ sở, công ty, doanh nghiệp, hộ kinh doanh hoặc hoạt động kinh doanh, hãy bổ sung ngữ cảnh "doanh nghiệp nhỏ và vừa".
-3. Nếu ngữ cảnh cho thấy vai trò pháp lý cụ thể, hãy bổ sung vai trò đó vào truy vấn:
-   * Lao động, hợp đồng lao động, lương, bằng cấp, bảo hiểm xã hội, sa thải, nghỉ việc → "người sử dụng lao động".
-   * Đấu thầu, gói thầu, hồ sơ dự thầu, nhà thầu → "nhà thầu là doanh nghiệp nhỏ và vừa".
-   * Đất đai, thuê đất, tiền sử dụng đất, mặt bằng sản xuất → "người sử dụng đất" hoặc "bên thuê mặt bằng".
-   * Đăng ký kinh doanh, chuyển đổi hộ kinh doanh, giấy chứng nhận đăng ký doanh nghiệp → "hộ kinh doanh chuyển đổi thành doanh nghiệp nhỏ và vừa".
-   * Vay vốn, quỹ phát triển, hỗ trợ lãi suất, bảo lãnh tín dụng → "doanh nghiệp nhỏ và vừa vay vốn hoặc nhận hỗ trợ tài chính".
-4. Chỉ bổ sung vai trò pháp lý khi vai trò đó được suy ra rõ từ nội dung câu hỏi; không suy diễn quá xa.
-5. Không thêm tên luật, số điều, mức phạt, điều kiện pháp lý hoặc kết luận pháp lý nếu câu hỏi chưa nêu.
-6. Không trả lời câu hỏi, không giải thích, không liệt kê căn cứ pháp lý.
-7. Chỉ trả về một truy vấn đã viết lại, không thêm bất kỳ nội dung nào khác.
-
-Đầu vào:
-{question}
-
-Đầu ra:
-{rewritten_query}
+Câu hỏi: "Hộ kinh doanh doanh thu 3 tỷ có phải nộp thuế GTGT không?"
+Truy vấn: Nghĩa vụ nộp thuế GTGT của hộ kinh doanh có doanh thu 3 tỷ đồng chuyển đổi thành DNNVV
 
 """
 
 REWRITE_QUERY_USER_PROMPT = """Câu hỏi: {question}"""
 
-HYDE_SYSTEM_PROMPT = """Bạn là bộ tạo hypothetical answer cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa.
+HYDE_SYSTEM_PROMPT = """Bạn là bộ tạo hypothetical answer cho hệ thống tra cứu pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa (DNNVV).
 
-Ngữ cảnh mặc định:
-- Mọi cơ sở, công ty, doanh nghiệp, hộ kinh doanh, tổ chức kinh doanh trong câu hỏi đều được hiểu là doanh nghiệp nhỏ và vừa, trừ khi người dùng nói rõ khác.
+Nhiệm vụ: Viết một đoạn văn ngắn (5-6 câu) bằng tiếng Việt mô phỏng nội dung điều luật liên quan đến câu hỏi, phục vụ embedding/search. Chỉ trả về đoạn văn, không thêm bất kỳ nội dung nào khác.
 
-Viết một đoạn giả định ngắn bằng tiếng Việt để phục vụ embedding/search.
-Đoạn này nên chứa thuật ngữ pháp lý chung liên quan đến doanh nghiệp nhỏ và vừa, hỗ trợ doanh nghiệp, điều kiện hưởng hỗ trợ, thủ tục, quyền và nghĩa vụ nếu phù hợp.
-Không nêu số điều, số khoản, số văn bản, mức phạt, thời hạn hoặc điều kiện cụ thể nếu câu hỏi không cung cấp.
-Không kết luận pháp lý.
+Quy tắc:
+- Dùng thuật ngữ pháp lý phù hợp với chủ đề: quyền, nghĩa vụ, điều kiện, thủ tục, chế độ hỗ trợ của DNNVV.
+- Mọi chủ thể kinh doanh đều mặc định là DNNVV.
+- Không nêu số điều, số khoản, mã văn bản, mức phạt, thời hạn hoặc con số cụ thể nếu câu hỏi không cung cấp.
+- Không kết luận pháp lý, không trả lời trực tiếp câu hỏi.
 
-Chỉ trả về đoạn hypothetical answer. Không giải thích.
+Ví dụ:
+Câu hỏi: "Công ty tôi muốn sa thải nhân viên vì doanh thu sụt giảm thì cần làm gì?"
+Đoạn văn: "Doanh nghiệp không được tự ý sa thải nhân viên vì lý do doanh thu sụt giảm. Thay vào đó, công ty phải thực hiện quy trình đơn phương chấm dứt hợp đồng do lý do kinh tế.Đầu tiên, công ty cần xây dựng phương án sử dụng lao động và trao đổi với công đoàn. Tiếp theo, doanh nghiệp phải thông báo bằng văn bản cho nhân viên trước 30 hoặc 45 ngày tùy loại hợp đồng. Cuối cùng, công ty có nghĩa vụ chi trả trợ cấp mất việc làm cho nhân viên đủ điều kiện."
+
 """
 
 HYDE_USER_PROMPT = """Câu hỏi: {question}"""
+
+REWRITE_FILTER_SYSTEM_PROMPT = """Bạn là bộ lọc relevance cho hệ thống RAG pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa (DNNVV).
+Nhiệm vụ: Đánh giá đoạn điều luật có thể dùng làm căn cứ pháp lý trả lời rewritten query hay không.
+Trả về đúng một trong hai nhãn:
+- PASS: điều luật có nội dung liên quan trực tiếp đến tình huống trong query, có thể dùng làm căn cứ để trả lời.
+- DROP: điều luật chỉ trùng từ khóa bề mặt, áp dụng cho đối tượng khác, quá chung chung hoặc không giúp trả lời query.
+Quy tắc:
+- Chỉ xét nội dung điều luật được cung cấp.
+- Điều luật áp dụng cho doanh nghiệp, hộ kinh doanh, người sử dụng lao động, người nộp thuế, v.v. đều coi là phù hợp đối tượng nếu ngữ cảnh query khớp — không loại chỉ vì thiếu chữ "doanh nghiệp nhỏ và vừa".
+- Không suy diễn thêm từ kiến thức ngoài.
+- Không giải thích. Chỉ trả PASS hoặc DROP.
+"""
+
+REWRITE_FILTER_USER_PROMPT = """Rewritten query:
+{query}
+Điều luật cần đánh giá:
+{article_ref}
+Tiêu đề: {article_title}
+Nội dung: {content}"""
+
+
+HYDE_FILTER_SYSTEM_PROMPT = """Bạn là bộ lọc relevance cho hệ thống RAG pháp luật Việt Nam dành cho doanh nghiệp nhỏ và vừa (DNNVV).
+Nhiệm vụ: Đánh giá điều luật ứng viên có nội dung pháp lý KHỚP CAO với hypothetical answer (do HyDE sinh ra) hay không.
+Trả về đúng một trong hai nhãn:
+- PASS: điều luật chứa quy định pháp lý cốt lõi trùng khớp với nội dung chính của hypothetical answer (cùng đối tượng điều chỉnh, cùng hành vi/nghĩa vụ/quyền được đề cập, cùng phạm vi áp dụng). Cho phép khác biệt về câu chữ, nhưng nội dung pháp lý phải gần như tương đương, không chỉ "có liên quan".
+- DROP: điều luật chỉ trùng từ khóa bề mặt, đề cập chủ đề lân cận, bổ sung ngữ cảnh chung, hoặc chỉ liên quan một phần mà không xác nhận trực tiếp nội dung chính của hypothetical answer.
+Quy tắc:
+- Chỉ xét hypothetical answer và nội dung điều luật được cung cấp.
+- Không yêu cầu trùng câu chữ; nhưng bắt buộc nội dung pháp lý phải tương đồng cao, không chỉ "liên quan đến cùng chủ đề".
+- Nếu điều luật chỉ đề cập một phần nhỏ, hoặc nói về quy định khác nhưng cùng lĩnh vực, đó là DROP.
+- Điều luật áp dụng cho doanh nghiệp, hộ kinh doanh, người sử dụng lao động, người nộp thuế, v.v. được coi là phù hợp đối tượng nếu ngữ cảnh hypothetical answer khớp — nhưng vẫn phải khớp về nội dung quy định, không chỉ khớp đối tượng.
+- Khi không chắc chắn mức độ tương đồng có đạt ngưỡng cao hay không, chọn DROP.
+- Không suy diễn thêm từ kiến thức ngoài.
+- Không giải thích. Chỉ trả PASS hoặc DROP.
+
+Ví dụ 1:
+Hypothetical answer: Hộ kinh doanh có doanh thu trên 100 triệu đồng/năm phải nộp thuế giá trị gia tăng và thuế thu nhập cá nhân.
+Điều luật ứng viên: "Điều 7. Nguyên tắc tính thuế - Hộ kinh doanh, cá nhân kinh doanh có doanh thu từ hoạt động sản xuất, kinh doanh trong năm dương lịch trên 100 triệu đồng thì thuộc đối tượng phải nộp thuế giá trị gia tăng và phải nộp thuế thu nhập cá nhân."
+Nhãn: PASS
+
+Ví dụ 2:
+Hypothetical answer: Doanh nghiệp chậm nộp thuế sẽ bị tính tiền chậm nộp theo mức 0,03%/ngày trên số tiền thuế chậm nộp.
+Điều luật ứng viên: "Điều 17. Trách nhiệm của người nộp thuế - Người nộp thuế có trách nhiệm khai thuế chính xác, trung thực, đầy đủ và nộp hồ sơ thuế đúng thời hạn."
+Nhãn: DROP
+
+"""
+
+HYDE_FILTER_USER_PROMPT = """Hypothetical answer dùng để retrieval:
+{query}
+Điều luật cần đánh giá:
+{article_ref}
+Tiêu đề: {article_title}
+Nội dung: {content}"""
 
 def build_intent_messages(question: str) -> tuple[str, str]:
     """Tạo system/user message cho bước intent."""
@@ -94,6 +140,19 @@ def build_hyde_messages(question: str) -> tuple[str, str]:
     """Tạo system/user message cho bước HyDE."""
 
     return HYDE_SYSTEM_PROMPT, HYDE_USER_PROMPT.format(question=question)
+
+
+def build_llm_filter_messages(query: str, article: LegalArticle, query_source: str) -> tuple[str, str]:
+    """Tạo system/user message để LLM quyết định PASS hoặc DROP một điều luật."""
+
+    prompt = HYDE_FILTER_USER_PROMPT if query_source == "hyde" else REWRITE_FILTER_USER_PROMPT
+    system_prompt = HYDE_FILTER_SYSTEM_PROMPT if query_source == "hyde" else REWRITE_FILTER_SYSTEM_PROMPT
+    return system_prompt, prompt.format(
+        query=query,
+        article_ref=article.article_ref,
+        article_title=article.article_title or "",
+        content=article.content.strip()[:3000],
+    )
 
 
 def format_article_context(articles: list[LegalArticle]) -> str:

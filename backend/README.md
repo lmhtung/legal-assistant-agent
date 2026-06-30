@@ -104,15 +104,23 @@ Backend container mount trực tiếp `backend/config.yaml` và dùng host netwo
 
 Nếu `legal_assistant.reranker.enabled=true`, backend gọi Qwen3 reranker sau retrieval qua `POST /v1/rerank`.
 Reranker chấm từng điều luật bằng `retrieval_question` hiện tại, tức là câu hỏi đã
-rewrite hoặc HyDE answer tùy config. Candidate có score nhỏ hơn `threshold` bị loại
-trước khi đưa context vào LLM. Score có thể âm, nên threshold được để dạng float tự do.
+rewrite hoặc HyDE answer tùy config. Phần lọc sau rerank có hai mode:
+
+- `filter_mode: fixed`: giữ candidate có `score >= threshold`.
+- `filter_mode: largest_gap`: sắp xếp score giảm dần, tìm khoảng cách lớn nhất giữa hai kết quả liền kề, rồi giữ các kết quả phía trên khoảng cách đó. `min_gap` tránh cắt khi score quá đều, `min_keep` là số kết quả tối thiểu luôn giữ.
+
+Score reranker có thể âm, nên threshold được để dạng float tự do.
+
+### LLM filter sau rerank
+
+Nếu `legal_assistant.llm_filter.enabled=true`, backend gửi lần lượt các điều luật đã qua rerank cho LLM đánh giá `PASS` hoặc `DROP`. Bước này dùng prompt filter riêng cho rewritten query và prompt filter riêng cho HyDE answer. Nếu `hyde.enabled=true`, LLM đánh giá theo HyDE answer; nếu không, nó đánh giá theo rewritten query hoặc query gốc. Nếu LLM lỗi, item đó được giữ lại; nếu LLM loại hết, `min_keep` giữ lại top N sau rerank để tránh mất toàn bộ context.
 
 ## Retrieval runtime
 
 Agent không còn dùng LLM để phân loại category. Mỗi request luôn search global `top_k` trên retrieval store đã được nạp khi startup.
 
 ```text
-question -> intent -> rewrite/HyDE -> global search top_k -> rerank threshold -> answer -> output
+question -> intent -> rewrite/HyDE -> global search top_k -> rerank filter -> optional LLM filter -> answer -> output
 ```
 
 Dataset/PostgreSQL không còn dùng trường `category`; index Chroma/BM25 được build thành một retrieval store global.

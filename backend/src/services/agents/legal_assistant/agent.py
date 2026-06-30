@@ -17,6 +17,7 @@ from src.services.agents.legal_assistant.node import (
     analyze_intent_node,
     format_submission_node,
     generate_answer_node,
+    llm_filter_node,
     prepare_retrieval_query_node,
     rerank_node,
     retrieve_node,
@@ -102,6 +103,8 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
                     "reranker_enabled": self.settings.legal_assistant.reranker.enabled,
                     "reranker_threshold": self.settings.legal_assistant.reranker.threshold,
                     "reranked_count": len(state.get("reranked", [])),
+                    "llm_filter_enabled": self.settings.legal_assistant.llm_filter.enabled,
+                    "llm_filtered_count": len(state.get("llm_filtered", [])),
                     "selected_count": len(state.get("selected_articles", [])),
                     "memory_enabled": self.settings.short_memory.enabled,
                 }
@@ -129,6 +132,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         workflow.add_node("prepare_retrieval_query", partial(prepare_retrieval_query_node, self))
         workflow.add_node("retrieve", partial(retrieve_node, self))
         workflow.add_node("rerank", partial(rerank_node, self))
+        workflow.add_node("llm_filter", partial(llm_filter_node, self))
         workflow.add_node("generate_answer", partial(generate_answer_node, self))
         workflow.add_node("format_submission", partial(format_submission_node, self))
 
@@ -136,7 +140,8 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
         workflow.add_edge("analyze_intent", "prepare_retrieval_query")
         workflow.add_edge("prepare_retrieval_query", "retrieve")
         workflow.add_edge("retrieve", "rerank")
-        workflow.add_edge("rerank", "generate_answer")
+        workflow.add_edge("rerank", "llm_filter")
+        workflow.add_edge("llm_filter", "generate_answer")
         workflow.add_edge("generate_answer", "format_submission")
         workflow.add_edge("format_submission", END)
 
@@ -149,6 +154,7 @@ class LegalAssistantAgent(BaseAgent[LegalAnswerRequest, LegalAnswerResponse, Leg
             prepare_retrieval_query_node,
             retrieve_node,
             rerank_node,
+            llm_filter_node,
             generate_answer_node,
             format_submission_node,
         ):

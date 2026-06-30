@@ -131,9 +131,20 @@ class RerankerSettings(ConfigModel):
     api_key: str = "sk-1234"
     base_url: str = "http://localhost:8025/v1"
     model: str = "qwen3-reranker-06b"
+    filter_mode: Literal["fixed", "largest_gap"] = "fixed"
     threshold: float = 0.0
+    min_gap: float = Field(default=0.0, ge=0)
+    min_keep: int = Field(default=1, ge=1)
     timeout_seconds: float = Field(default=60.0, gt=0)
     endpoint: str = "/v1/rerank"
+
+
+class LLMFilterSettings(ConfigModel):
+    """Bật/tắt bước LLM đánh giá từng điều luật sau rerank."""
+
+    enabled: bool = False
+    max_concurrency: int = Field(default=4, ge=1)
+    min_keep: int = Field(default=1, ge=0)
 
 
 class PostgreSQLSettings(ConfigModel):
@@ -192,6 +203,7 @@ class LegalAssistantSettings(ConfigModel):
     rewrite: RewriteSettings = Field(default_factory=RewriteSettings)
     hyde: HyDESettings = Field(default_factory=HyDESettings)
     reranker: RerankerSettings = Field(default_factory=RerankerSettings)
+    llm_filter: LLMFilterSettings = Field(default_factory=LLMFilterSettings)
     postgres: PostgreSQLSettings = Field(default_factory=PostgreSQLSettings)
     vector_store: VectorStoreSettings = Field(default_factory=VectorStoreSettings)
 

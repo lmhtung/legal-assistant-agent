@@ -42,6 +42,7 @@ class AgentState(TypedDict, total=False):
     tool_calls: list[dict[str, Any]]
     retrieved: list[RetrievedCandidate]
     reranked: list[RetrievedCandidate]
+    llm_filtered: list[RetrievedCandidate]
     selected_articles: list[LegalArticle]
     answer: str
     relevant_docs: list[str]

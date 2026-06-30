@@ -10,14 +10,14 @@ llm:
   api_key: sk-1234
   base_url: http://localhost:8024/v1
   default_model: qwen3-8b-fp8
-  temperature: 0.6
+  temperature: 0.0
   max_tokens: 3000
   enable_thinking: false
 
 embeddings: 
   api_key: sk-1234
   base_url: http://localhost:8026/v1 # OpenAIEmbeddings sẽ gọi POST {base_url}/embeddings
-  model: qwen3-embed-06b
+  model: qwen3-embedding-4b
   max_input_tokens: 31950 # cắt text embedding để không vượt context model
   tokenizer_encoding: cl100k_base
 
@@ -31,22 +31,29 @@ legal_assistant:
     token_streaming: true # true: stream token LLM trong bubble chat
   competition:
     enabled: true # true: bỏ qua Intent và chạy trực tiếp legal RAG cho tập test
-    max_concurrency: 16 # số câu hỏi competition chạy song song
+    max_concurrency: 12 # số câu hỏi competition chạy song song
     save_outputs: true # tự lưu kết quả vào output_dir khi xong hoặc lỗi
     output_dir: ./outputs
   rewrite:       #
-    enabled: false
+    enabled: false # true
     max_variants: 3
   hyde:
-    enabled: true
+    enabled: true # false
   reranker:
-    enabled: true
+    enabled: false
     api_key: sk-1234
     base_url: http://localhost:8025
     model: qwen3-reranker-06b
     endpoint: /v1/rerank
-    threshold: 0.3 # score có thể âm; tăng/giảm ngưỡng để lọc chặt/lỏng hơn            Test từ 0.3-0.9 
+    filter_mode: largest_gap # fixed | largest_gap
+    threshold: 0.5 # dùng khi filter_mode=fixed; score có thể âm
+    min_gap: 0.0 # dùng khi filter_mode=largest_gap; gap nhỏ hơn giá trị này thì không cắt
+    min_keep: 1 # số kết quả tối thiểu luôn giữ sau rerank
     timeout_seconds: 60
+  llm_filter:
+    enabled: true # true: LLM đánh giá từng kết quả sau rerank và loại context nhiễu
+    max_concurrency: 2
+    min_keep: 1 # nếu LLM loại hết, vẫn giữ lại top N sau rerank để tránh mất toàn bộ context
   postgres:
     enabled: true
     database_url: postgresql://postgres:postgres@localhost:23432/legal_assistant
@@ -54,7 +61,7 @@ legal_assistant:
     batch_size: 256
   vector_store:
     mode: chroma # bm25 | chroma | hybrid
-    top_k: 5
+    top_k: 7 # 7
     persist_directory: ./chroma_db
     default_collection: legal_articles
     rrf_k: 60

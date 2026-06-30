@@ -33,6 +33,7 @@ const STAGE_TITLES: Record<string, string> = {
   categories: "Phân loại category",
   retrieval: "Retrieval",
   rerank: "Rerank",
+  llm_filter: "LLM filter",
   answer: "Tổng hợp câu trả lời",
   format: "Định dạng và memory",
   result: "Kết quả",
