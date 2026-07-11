@@ -175,7 +175,7 @@ Dataset mặc định:
 backend/data/base_data.json
 ```
 
-Luồng:
+Luồng hoạt động:
 
 ```text
 JSON -> PostgreSQL -> backend startup -> Chroma + BM25 -> agent
